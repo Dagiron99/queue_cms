@@ -1,4 +1,10 @@
 <?php
+namespace App\Services;
+
+use Exception;
+use App\Models\Settings;
+use App\Models\Manager;
+use App\Models\IntegrationModel; // Ensure this class exists in the specified namespace or create it if missing
 
 /**
  * Сервис для работы с API RetailCRM
@@ -18,23 +24,22 @@ class RetailCRMService
     /**
      * Инициализация сервиса RetailCRM
      */
-// В начале класса RetailCRMService:
-public function __construct()
-{
-    $this->settings = new Settings();
-    $retailCrmSettings = $this->settings->getSettings('retailcrm');
-    
-    $this->apiUrl = $retailCrmSettings['url'] ?? '';
-    $this->apiKey = $retailCrmSettings['api_key'] ?? '';
-    $this->site = $retailCrmSettings['site'] ?? '';
-    
-    // Настройка логирования
-    $this->ensureLogDirectory();
-    $this->logFile = BASE_PATH . '/storage/logs/retailcrm_api.log';
-    
-    // Логируем инициализацию сервиса
-    $this->log("RetailCRM service initialized. URL: {$this->apiUrl}, Site: {$this->site}");
-}
+    public function __construct()
+    {
+        $this->settings = new Settings();
+        $retailCrmSettings = $this->settings->getSettings('retailcrm');
+        
+        $this->apiUrl = $retailCrmSettings['url'] ?? '';
+        $this->apiKey = $retailCrmSettings['api_key'] ?? '';
+        $this->site = $retailCrmSettings['site'] ?? '';
+        
+        // Настройка логирования
+        $this->ensureLogDirectory();
+        $this->logFile = BASE_PATH . '/storage/logs/retailcrm_api.log';
+        
+        // Логируем инициализацию сервиса
+        $this->log("RetailCRM service initialized. URL: {$this->apiUrl}, Site: {$this->site}");
+    } // Удалена лишняя закрывающая скобка
 
     /**
      * Создание директории для логов, если не существует
@@ -244,11 +249,13 @@ public function __construct()
         
         // Проверяем соответствие статусов
         if (isset($this->settings['statuses']) && is_array($this->settings['statuses'])) {
-            // Находим соответствующий статус в RetailCRM на основе внутреннего статуса
-            foreach ($this->settings['statuses'] as $internalStatus => $retailcrmStatus) {
-                if ($internalStatus === $status) {
-                    $status = $retailcrmStatus;
-                    break;
+            $statuses = is_string($this->settings['statuses']) ? json_decode($this->settings['statuses'], true) : $this->settings['statuses'];
+            if (is_array($statuses)) {
+                foreach ($statuses as $internalStatus => $retailcrmStatus) {
+                    if ($internalStatus === $status) {
+                        $status = $retailcrmStatus;
+                        break;
+                    }
                 }
             }
         }
@@ -357,7 +364,7 @@ public function __construct()
                     'updated_at' => date('Y-m-d H:i:s')
                 ];
                 
-                $managerModel->createManager($newManager);
+                $managerModel->create($newManager);
                 $syncCount++;
             }
         }
@@ -400,7 +407,7 @@ public function __construct()
         $this->log("Successfully retrieved " . count($response['orders']) . " new orders");
         
         // Обновляем время последней синхронизации
-        $integrationModel = new IntegrationModel();
+        $integrationModel = new IntegrationModel(); // Ensure the IntegrationModel class is defined and accessible
         $this->settings['last_sync_time'] = date('Y-m-d H:i:s');
         $integrationModel->saveSettings('retailcrm', $this->settings);
         

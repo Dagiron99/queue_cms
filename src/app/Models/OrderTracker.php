@@ -1,5 +1,19 @@
 <?php
 
+namespace App\Models;
+
+use App\Services\DatabaseService;
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+// use App\Database\Database; // Commented out as the class is not found
+
+
+
+use PDO;
+use PDOException;
+
+
+
 /**
  * Модель для работы с заказами и их отслеживанием
  * 
@@ -10,14 +24,16 @@ class OrderTracker
     private $db;
     private $logger;
     private $tableFields; // Кэш полей таблицы
+    private $tableName = 'orders_tracking'; // Унифицированное имя таблицы
 
     /**
      * Инициализация модели
      */
     public function __construct()
     {
-        $this->db = Database::getInstance()->getConnection();
-        $this->logger = new Logger('order_tracker.log');
+        $this->logger = new Logger('order_tracker');
+
+        $this->db = DatabaseService::getInstance()->getConnection(); // Updated to use DatabaseService
         $this->tableFields = $this->getTableFields();
     }
 
@@ -27,12 +43,12 @@ class OrderTracker
     private function getTableFields()
     {
         try {
-            $stmt = $this->db->prepare("DESCRIBE orders_tracking");
+            $stmt = $this->db->prepare("DESCRIBE {$this->tableName}");
             $stmt->execute();
             $fields = $stmt->fetchAll(PDO::FETCH_COLUMN);
             return $fields;
         } catch (PDOException $e) {
-            $this->logger->log("Error getting table fields: " . $e->getMessage());
+            $this->logger->error("Error getting table fields: " . $e->getMessage());
             return [];
         }
     }
@@ -73,7 +89,8 @@ class OrderTracker
                 'queue_id' => PDO::PARAM_INT,
                 'data' => PDO::PARAM_STR,
                 'created_at' => PDO::PARAM_STR,
-                'updated_at' => PDO::PARAM_STR
+                'updated_at' => PDO::PARAM_STR,
+                'distribution_algorithm' => PDO::PARAM_STR
             ];
 
             // Добавляем базовые поля
@@ -85,7 +102,7 @@ class OrderTracker
                 } elseif ($field == 'initial_status' && isset($orderData['status'])) {
                     $value = $orderData['status'];
                 } elseif (isset($orderData[$field])) {
-                    $value = $orderData[$field];
+                    $value = isset($orderData[$field]) ? $orderData[$field] : null;
                 }
 
                 // Если поле отсутствует, устанавливаем значение по умолчанию
@@ -109,7 +126,7 @@ class OrderTracker
             // Добавляем опциональные поля, если они существуют в таблице
             foreach ($optionalFields as $field => $type) {
                 if ($this->fieldExists($field) && isset($orderData[$field])) {
-                    $value = $orderData[$field];
+                    $value = $criteria[$field];
                     
                     // Обработка специальных полей
                     if ($field == 'data' && is_array($value)) {
@@ -132,7 +149,7 @@ class OrderTracker
             }
 
             // Формируем SQL-запрос
-            $sql = "INSERT INTO orders_tracking (" . implode(", ", $fields) . ") VALUES (" . implode(", ", $placeholders) . ")";
+            $sql = "INSERT INTO {$this->tableName} (" . implode(", ", $fields) . ") VALUES (" . implode(", ", $placeholders) . ")";
             $stmt = $this->db->prepare($sql);
 
             // Привязываем параметры
@@ -143,21 +160,94 @@ class OrderTracker
             $result = $stmt->execute();
 
             if ($result) {
-                $this->logger->log("Order {$orderData['order_id']} added for tracking");
+                $this->logger->info("Order {$orderData['order_id']} added for tracking");
                 
                 // Добавляем запись в историю статусов, если таблица существует
                 $this->addStatusHistory($orderData['order_id'], $orderData['status'] ?? 'new');
             } else {
-                $this->logger->log("Failed to add order {$orderData['order_id']} for tracking");
+                $this->logger->error("Failed to add order {$orderData['order_id']} for tracking");
             }
 
             return $result;
         } catch (PDOException $e) {
-            $this->logger->log("Error adding order for tracking: " . $e->getMessage());
+            $this->logger->error("Error adding order for tracking: " . $e->getMessage());
             return false;
         }
     }
 
+
+
+    /**
+     * Получение заказов с учетом существующих полей
+     */
+
+    public function getOrders($criteria = [])
+    {
+        try {
+            // Создаем SQL-запрос динамически на основе доступных полей
+            $fields = [];
+            $bindings = [];
+
+            // Базовые поля, которые должны существовать
+            $requiredFields = [
+                'current_status' => PDO::PARAM_STR,
+                'assigned_at' => PDO::PARAM_STR,
+                'last_checked_at' => PDO::PARAM_STR,
+                'processed' => PDO::PARAM_INT
+            ];
+
+            // Опциональные поля, которые могут существовать
+            $optionalFields = [
+                'platform' => PDO::PARAM_STR,
+                'queue_id' => PDO::PARAM_INT,
+                'data' => PDO::PARAM_STR,
+                'updated_at' => PDO::PARAM_STR,
+                'distribution_algorithm' => PDO::PARAM_STR
+            ];
+
+            // Добавляем базовые поля
+            foreach ($requiredFields as $field => $type) {
+                if (isset($orderData[$field]) && $this->fieldExists($field)) {
+                    $fields[] = "$field = :$field";
+                    $bindings[$field] = ['value' => $criteria[$field], 'type' => $type];
+                }
+            }
+
+            // Добавляем опциональные поля, если они существуют в таблице
+            foreach ($optionalFields as $field => $type) {
+                if ($this->fieldExists($field) && isset($orderData[$field])) {
+                    $value = $orderData[$field];
+                    
+                    // Обработка специальных полей
+                    if ($field == 'data' && is_array($value)) {
+                        $value = json_encode($value);
+                    }
+                    
+                    $fields[] = "$field = :$field";
+                    $bindings[$field] = ['value' => $value, 'type' => $type];
+                }
+            }
+
+            // Добавляем NOW() для полей дат, если они не установлены
+            if ($this->fieldExists('updated_at') && !isset($bindings['updated_at'])) {
+                $fields[] = "updated_at = NOW()";
+            }
+
+            // Формируем SQL-запрос
+            if (empty($fields)) {
+                throw new \Exception("No fields to update");
+            }
+
+            $sql = "UPDATE {$this->tableName} SET " . implode(", ", $fields) . " WHERE order_id = :order_id";
+            $sql = "SELECT * FROM {$this->tableName}";
+            $stmt = $this->db->prepare($sql);
+            $stmt->execute();
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $this->logger->error("Error getting orders: " . $e->getMessage());
+            return [];
+        }
+    }
     /**
      * Обновление статуса заказа
      */
@@ -171,16 +261,20 @@ class OrderTracker
             $updateFields = [
                 "$statusField = :status",
                 "last_checked_at = NOW()",
-                "processed = 1",
-                "processed_at = NOW()"
+                "processed = 1"
             ];
+            
+            // Добавляем processed_at, если поле существует
+            if ($this->fieldExists('processed_at')) {
+                $updateFields[] = "processed_at = NOW()";
+            }
             
             // Добавляем updated_at, если поле существует
             if ($this->fieldExists('updated_at')) {
                 $updateFields[] = "updated_at = NOW()";
             }
             
-            $sql = "UPDATE orders_tracking SET " . implode(", ", $updateFields) . " WHERE order_id = :order_id";
+            $sql = "UPDATE {$this->tableName} SET " . implode(", ", $updateFields) . " WHERE order_id = :order_id";
             $stmt = $this->db->prepare($sql);
             
             $stmt->bindParam(':status', $newStatus, PDO::PARAM_STR);
@@ -189,7 +283,7 @@ class OrderTracker
             $result = $stmt->execute();
             
             if ($result) {
-                $this->logger->log("Status for order {$orderId} updated to {$newStatus}");
+                $this->logger->info("Status for order {$orderId} updated to {$newStatus}");
                 
                 // Добавляем запись в историю статусов, если есть комментарий
                 if ($comment) {
@@ -198,12 +292,12 @@ class OrderTracker
                     $this->addStatusHistory($orderId, $newStatus);
                 }
             } else {
-                $this->logger->log("Failed to update status for order {$orderId}");
+                $this->logger->error("Failed to update status for order {$orderId}");
             }
             
             return $result;
         } catch (PDOException $e) {
-            $this->logger->log("Error updating order status: " . $e->getMessage());
+            $this->logger->error("Error updating order status: " . $e->getMessage());
             return false;
         }
     }
@@ -252,7 +346,7 @@ class OrderTracker
             
             return $stmt->execute();
         } catch (PDOException $e) {
-            $this->logger->log("Error adding status history: " . $e->getMessage());
+            $this->logger->error("Error adding status history: " . $e->getMessage());
             return false;
         }
     }
@@ -276,10 +370,10 @@ class OrderTracker
             ";
             
             $this->db->exec($sql);
-            $this->logger->log("Created order_status_history table");
+            $this->logger->info("Created order_status_history table");
             return true;
         } catch (PDOException $e) {
-            $this->logger->log("Error creating status history table: " . $e->getMessage());
+            $this->logger->error("Error creating status history table: " . $e->getMessage());
             return false;
         }
     }
@@ -298,7 +392,7 @@ class OrderTracker
                 SELECT 
                     ot.*,
                     m.name as manager_name
-                FROM orders_tracking ot
+                FROM {$this->tableName} ot
                 LEFT JOIN managers m ON ot.manager_id = m.id
                 ORDER BY ot.$dateField DESC
                 LIMIT :limit OFFSET :offset
@@ -310,11 +404,11 @@ class OrderTracker
             $stmt->execute();
             
             $result = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            $this->logger->log("getAllOrders returned " . count($result) . " rows");
+            $this->logger->info("getAllOrders returned " . count($result) . " rows");
             
             return $result;
         } catch (PDOException $e) {
-            $this->logger->log("Error in getAllOrders: " . $e->getMessage());
+            $this->logger->error("Error in getAllOrders: " . $e->getMessage());
             return [];
         }
     }
@@ -330,7 +424,7 @@ class OrderTracker
                 SELECT 
                     ot.*,
                     m.name as manager_name
-                FROM orders_tracking ot
+                FROM {$this->tableName} ot
                 LEFT JOIN managers m ON ot.manager_id = m.id
             ";
             
@@ -341,7 +435,7 @@ class OrderTracker
                         ot.*,
                         m.name as manager_name,
                         q.name as queue_name
-                    FROM orders_tracking ot
+                    FROM {$this->tableName} ot
                     LEFT JOIN managers m ON ot.manager_id = m.id
                     LEFT JOIN queues q ON ot.queue_id = q.id
                 ";
@@ -355,7 +449,7 @@ class OrderTracker
             
             return $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->log("Error getting order by ID: " . $e->getMessage());
+            $this->logger->error("Error getting order by ID: " . $e->getMessage());
             return false;
         }
     }
@@ -394,7 +488,7 @@ class OrderTracker
             
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->log("Error getting order status history: " . $e->getMessage());
+            $this->logger->error("Error getting order status history: " . $e->getMessage());
             return [];
         }
     }
@@ -415,7 +509,7 @@ class OrderTracker
                     SUM(CASE WHEN $statusField IN ('new', 'processing') THEN 1 ELSE 0 END) as in_progress,
                     SUM(CASE WHEN $statusField IN ('completed', 'done', 'success') THEN 1 ELSE 0 END) as processed,
                     SUM(CASE WHEN $statusField IN ('cancelled', 'error', 'failed') THEN 1 ELSE 0 END) as failed
-                FROM orders_tracking
+                FROM {$this->tableName}
             ";
             
             $stmt = $this->db->query($sql);
@@ -430,7 +524,7 @@ class OrderTracker
                     SUM(CASE WHEN ot.$statusField IN ('completed', 'done', 'success') THEN 1 ELSE 0 END) as processed_orders,
                     SUM(CASE WHEN ot.$statusField IN ('cancelled', 'error', 'failed') THEN 1 ELSE 0 END) as failed_orders
                 FROM managers m
-                LEFT JOIN orders_tracking ot ON m.id = ot.manager_id
+                LEFT JOIN {$this->tableName} ot ON m.id = ot.manager_id
                 WHERE m.is_active = 1
                 GROUP BY m.id, m.name
                 ORDER BY processed_orders DESC
@@ -445,7 +539,7 @@ class OrderTracker
             
             $sql = "
                 SELECT COUNT(*) as count 
-                FROM orders_tracking 
+                FROM {$this->tableName} 
                 WHERE DATE($dateField) = CURDATE()
             ";
             
@@ -463,7 +557,7 @@ class OrderTracker
                         SUM(CASE WHEN ot.$statusField IN ('completed', 'done', 'success') THEN 1 ELSE 0 END) as processed_orders,
                         SUM(CASE WHEN ot.$statusField IN ('cancelled', 'error', 'failed') THEN 1 ELSE 0 END) as failed_orders
                     FROM queues q
-                    LEFT JOIN orders_tracking ot ON q.id = ot.queue_id
+                    LEFT JOIN {$this->tableName} ot ON q.id = ot.queue_id
                     WHERE q.is_active = 1
                     GROUP BY q.id, q.name
                     ORDER BY processed_orders DESC
@@ -475,7 +569,7 @@ class OrderTracker
             
             return $stats;
         } catch (PDOException $e) {
-            $this->logger->log("Error getting order statistics: " . $e->getMessage());
+            $this->logger->error("Error getting order statistics: " . $e->getMessage());
             return [
                 'total_orders' => 0,
                 'in_progress' => 0,
@@ -550,7 +644,7 @@ class OrderTracker
             }
             
             $sql .= "
-                FROM orders_tracking ot
+                FROM {$this->tableName} ot
                 LEFT JOIN managers m ON ot.manager_id = m.id
             ";
             
@@ -574,7 +668,7 @@ class OrderTracker
             $stmt->execute();
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->log("Error getting filtered orders: " . $e->getMessage());
+            $this->logger->error("Error getting filtered orders: " . $e->getMessage());
             return [];
         }
     }
@@ -582,7 +676,7 @@ class OrderTracker
     /**
      * Получение количества активных заказов у менеджера
      */
-    public function getManagerActiveOrdersCount($managerId)
+    public function getActiveOrdersCount($managerId)
     {
         try {
             // Определяем имя поля статуса
@@ -590,11 +684,15 @@ class OrderTracker
             
             $sql = "
                 SELECT COUNT(*) as count
-                FROM orders_tracking
+                FROM {$this->tableName}
                 WHERE manager_id = :manager_id
-                AND $statusField IN ('new', 'processing')
-                AND processed = 0
+                AND $statusField IN ('new', 'processing', 'assigned', 'in_progress')
             ";
+            
+            // Добавляем условие processed, если поле существует
+            if ($this->fieldExists('processed')) {
+                $sql .= " AND processed = 0";
+            }
             
             $stmt = $this->db->prepare($sql);
             $stmt->bindParam(':manager_id', $managerId, PDO::PARAM_INT);
@@ -602,7 +700,7 @@ class OrderTracker
             
             return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
         } catch (PDOException $e) {
-            $this->logger->log("Error getting manager active orders count: " . $e->getMessage());
+            $this->logger->error("Error getting manager active orders count: " . $e->getMessage());
             return 0;
         }
     }
@@ -619,7 +717,7 @@ class OrderTracker
             
             $sql = "
                 SELECT COUNT(*) as count
-                FROM orders_tracking
+                FROM {$this->tableName}
                 WHERE DATE($dateField) = :date
             ";
             
@@ -629,7 +727,7 @@ class OrderTracker
             
             return $stmt->fetch(PDO::FETCH_ASSOC)['count'];
         } catch (PDOException $e) {
-            $this->logger->log("Error getting orders count by date: " . $e->getMessage());
+            $this->logger->error("Error getting orders count by date: " . $e->getMessage());
             return 0;
         }
     }
@@ -645,16 +743,16 @@ class OrderTracker
             
             $sql = "
                 SELECT 
-                    $statusField as current_status,
+                    $statusField as status,
                     COUNT(*) as count
-                FROM orders_tracking
+                FROM {$this->tableName}
                 GROUP BY $statusField
             ";
             
             $stmt = $this->db->query($sql);
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->log("Error getting orders count by status: " . $e->getMessage());
+            $this->logger->error("Error getting orders count by status: " . $e->getMessage());
             return [];
         }
     }
@@ -682,7 +780,7 @@ class OrderTracker
             }
             
             $sql .= "
-                FROM orders_tracking ot
+                FROM {$this->tableName} ot
                 LEFT JOIN managers m ON ot.manager_id = m.id
             ";
             
@@ -699,8 +797,196 @@ class OrderTracker
             
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (PDOException $e) {
-            $this->logger->log("Error getting recent orders: " . $e->getMessage());
+            $this->logger->error("Error getting recent orders: " . $e->getMessage());
             return [];
         }
     }
+
+    /**
+     * Получение статистики по алгоритмам распределения
+     */
+    public function getDistributionAlgorithmStats($queueId = null, $dateFrom = null, $dateTo = null)
+    {
+        try {
+            // Проверяем, существует ли поле distribution_algorithm
+            if (!$this->fieldExists('distribution_algorithm')) {
+                return [
+                    'round_robin' => 0,
+                    'load_balanced' => 0,
+                    'priority_based' => 0
+                ];
+            }
+
+            $conditions = [];
+            $params = [];
+            
+            if ($queueId) {
+                $conditions[] = "queue_id = :queue_id";
+                $params[':queue_id'] = $queueId;
+            }
+            
+            if ($dateFrom) {
+                $conditions[] = "DATE(created_at) >= :date_from";
+                $params[':date_from'] = $dateFrom;
+            }
+            
+            if ($dateTo) {
+                $conditions[] = "DATE(created_at) <= :date_to";
+                $params[':date_to'] = $dateTo;
+            }
+            
+            $whereClause = !empty($conditions) ? " WHERE " . implode(" AND ", $conditions) : "";
+            
+            $sql = "
+                SELECT 
+                    distribution_algorithm,
+                    COUNT(*) as count
+                FROM {$this->tableName}
+                $whereClause
+                GROUP BY distribution_algorithm
+            ";
+            
+            $stmt = $this->db->prepare($sql);
+            
+            // Привязываем параметры
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            // Преобразуем результат в удобный формат
+            $stats = [
+                'round_robin' => 0,
+                'load_balanced' => 0,
+                'priority_based' => 0
+            ];
+            
+            foreach ($rows as $row) {
+                $algorithm = $row['distribution_algorithm'];
+                if (isset($stats[$algorithm])) {
+                    $stats[$algorithm] = (int) $row['count'];
+                }
+            }
+            
+            return $stats;
+        } catch (PDOException $e) {
+            $this->logger->error("Error getting distribution algorithm stats: " . $e->getMessage());
+            return [
+                'round_robin' => 0,
+                'load_balanced' => 0,
+                'priority_based' => 0
+            ];
+        }
+    }
+    
+    /**
+     * Получение статистики распределения по менеджерам
+     */
+    public function getManagersDistributionStats($queueId = null, $dateFrom = null, $dateTo = null)
+    {
+        try {
+            // Определяем имя поля статуса
+            $statusField = $this->fieldExists('current_status') ? 'current_status' : 'status';
+            
+            $conditions = [];
+            $params = [];
+            
+            if ($queueId) {
+                $conditions[] = "ot.queue_id = :queue_id";
+                $params[':queue_id'] = $queueId;
+            }
+            
+            if ($dateFrom) {
+                $conditions[] = "DATE(ot.created_at) >= :date_from";
+                $params[':date_from'] = $dateFrom;
+            }
+            
+            if ($dateTo) {
+                $conditions[] = "DATE(ot.created_at) <= :date_to";
+                $params[':date_to'] = $dateTo;
+            }
+            
+            $whereClause = !empty($conditions) ? " WHERE " . implode(" AND ", $conditions) : "";
+            
+            $sql = "
+                SELECT 
+                    m.id,
+                    m.name,
+                    COUNT(ot.id) as total_orders,
+                    SUM(CASE WHEN ot.$statusField = 'assigned' OR ot.$statusField = 'in_progress' THEN 1 ELSE 0 END) as in_progress,
+                    SUM(CASE WHEN ot.$statusField = 'completed' THEN 1 ELSE 0 END) as completed,
+                    SUM(CASE WHEN ot.$statusField = 'cancelled' THEN 1 ELSE 0 END) as cancelled
+                FROM managers m
+                LEFT JOIN {$this->tableName} ot ON m.id = ot.manager_id
+                $whereClause
+                GROUP BY m.id, m.name
+                ORDER BY total_orders DESC
+            ";
+            
+            $stmt = $this->db->prepare($sql);
+            
+            // Привязываем параметры
+            foreach ($params as $key => $value) {
+                $stmt->bindValue($key, $value);
+            }
+            
+            $stmt->execute();
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (PDOException $e) {
+            $this->logger->error("Error getting managers distribution stats: " . $e->getMessage());
+            return [];
+        }
+    }
+    
+    /**
+     * Получение всех отслеживаемых ID заказов
+     */
+    public function getAllTrackedOrderIds()
+    {
+        try {
+            $sql = "SELECT order_id FROM {$this->tableName}";
+            $stmt = $this->db->query($sql);
+            
+            return array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'order_id');
+        } catch (PDOException $e) {
+            $this->logger->error("Error getting all tracked order IDs: " . $e->getMessage());
+            return [];
+        }
+    }
+    
+    /**
+     * Отслеживание заказа (добавление или обновление)
+     */
+    public function trackOrder($orderId, $managerId, $queueId, $orderData, $status = 'assigned')
+    {
+        try {
+            // Проверяем, существует ли уже заказ
+            $existingOrder = $this->getOrderById($orderId);
+            
+            if ($existingOrder) {
+                // Обновляем существующий заказ
+                return $this->updateOrderStatus($orderId, $status);
+            } else {
+                // Добавляем новый заказ
+                $data = [
+                    'order_id' => $orderId,
+                    'manager_id' => $managerId,
+                    'queue_id' => $queueId,
+                    'data' => $orderData,
+                    'status' => $status,
+                    'assigned_at' => date('Y-m-d H:i:s')
+                ];
+                
+                return $this->addOrder($data);
+            }
+        } catch (PDOException $e) {
+            $this->logger->error("Error tracking order: " . $e->getMessage());
+            return false;
+        }
+    }
+    // Removed duplicate method declaration to resolve the error.
+
+     
 }

@@ -1,4 +1,5 @@
 <?php
+namespace App\Controllers;
 
 
 class LogController extends BaseController

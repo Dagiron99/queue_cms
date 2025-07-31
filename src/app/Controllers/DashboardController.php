@@ -1,5 +1,15 @@
 <?php
 
+namespace App\Controllers;
+
+use App\Models\Manager;
+use App\Models\Queue;
+use App\Models\OrderTracker;
+use App\Services\Logger;
+// Ensure the correct namespace for SimpleCache is imported
+use App\Libraries\SimpleCache; // Replace with the correct namespace if different
+
+
 /**
  * Контроллер панели управления системы распределения заказов
  */
@@ -73,7 +83,7 @@ class DashboardController extends BaseController
                 ]
             ]);
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Dashboard error: " . $e->getMessage());
             
             // Отображаем ошибку
@@ -115,7 +125,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $managers, $this->cacheLifetime);
             return $managers;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting active managers: " . $e->getMessage());
             return [];
         }
@@ -137,7 +147,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $managers, $this->cacheLifetime);
             return $managers;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting inactive managers: " . $e->getMessage());
             return [];
         }
@@ -159,7 +169,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $queues, $this->cacheLifetime);
             return $queues;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting queues: " . $e->getMessage());
             return [];
         }
@@ -195,7 +205,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $stats, $this->cacheLifetime);
             return $stats;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting order statistics: " . $e->getMessage());
             
             // Возвращаем базовую структуру с нулевыми значениями
@@ -256,7 +266,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $stats, $this->cacheLifetime);
             return $stats;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting distribution stats: " . $e->getMessage());
             
             // Возвращаем пустую статистику
@@ -321,7 +331,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $orders, $this->cacheLifetime);
             return $orders;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting recent orders: " . $e->getMessage());
             return [];
         }
@@ -361,7 +371,7 @@ class DashboardController extends BaseController
             $this->cache->set($cacheKey, $logs, $this->cacheLifetime);
             return $logs;
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("Error getting recent logs: " . $e->getMessage());
             return [];
         }
@@ -419,7 +429,7 @@ class DashboardController extends BaseController
                 'data' => $data
             ]);
             
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->logger->log("AJAX update error: " . $e->getMessage());
             
             $this->json([
@@ -431,61 +441,3 @@ class DashboardController extends BaseController
     }
 }
 
-/**
- * Простой файловый кэш
- */
-class SimpleCache
-{
-    private $cacheDir;
-    
-    public function __construct($cacheDir = null)
-    {
-        $this->cacheDir = $cacheDir ?: BASE_PATH . '/cache/';
-        
-        if (!is_dir($this->cacheDir)) {
-            mkdir($this->cacheDir, 0755, true);
-        }
-    }
-    
-    public function get($key)
-    {
-        $filename = $this->cacheDir . md5($key) . '.cache';
-        
-        if (!file_exists($filename)) {
-            return false;
-        }
-        
-        $data = file_get_contents($filename);
-        $data = unserialize($data);
-        
-        if ($data['expires'] < time()) {
-            @unlink($filename);
-            return false;
-        }
-        
-        return $data['data'];
-    }
-    
-    public function set($key, $data, $lifetime = 3600)
-    {
-        $filename = $this->cacheDir . md5($key) . '.cache';
-        
-        $cache = [
-            'expires' => time() + $lifetime,
-            'data' => $data
-        ];
-        
-        return file_put_contents($filename, serialize($cache));
-    }
-    
-    public function delete($key)
-    {
-        $filename = $this->cacheDir . md5($key) . '.cache';
-        
-        if (file_exists($filename)) {
-            return unlink($filename);
-        }
-        
-        return true;
-    }
-}

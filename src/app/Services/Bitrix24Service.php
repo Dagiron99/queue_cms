@@ -1,5 +1,12 @@
 <?php
 
+namespace App\Services;
+
+use Exception;
+use App\Models\Settings;
+use App\Models\Manager;
+use App\Models\IntegrationModel; 
+
 /**
  * Сервис для работы с API Битрикс24
  * 

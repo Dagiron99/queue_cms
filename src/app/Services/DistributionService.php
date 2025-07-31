@@ -1,5 +1,10 @@
 <?php
 
+namespace App\Services;
+
+use App\Models\Queue;
+use App\Models\Manager;
+use App\Models\OrderTracker;
 
 class DistributionService
 {

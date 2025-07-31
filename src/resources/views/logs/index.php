@@ -12,6 +12,7 @@
         <div class="d-flex justify-content-end">
             <?php if ($selectedLog): ?>
                 <form method="post" action="/logs/clear" class="me-2" onsubmit="return confirm('Вы уверены, что хотите очистить лог-файл?');">
+
                     <input type="hidden" name="file" value="<?php echo htmlspecialchars($selectedLog); ?>">
                     <button type="submit" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-trash me-1"></i> Очистить лог

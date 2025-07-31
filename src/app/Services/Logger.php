@@ -1,26 +1,20 @@
 <?php
 
+namespace App\Services;
 
 class Logger
 {
     private $logFile;
-    private $logPath;
-
-    /**
-     * Конструктор класса
-     * 
-     * @param string $logFileName Имя файла лога
-     */
-    public function __construct($logFileName = 'app.log')
+    
+    public function __construct($filename = 'app.log')
     {
-        $this->logPath = BASE_PATH . '/storage/logs/';
-
+        $this->logFile = BASE_PATH . '/storage/logs/' . $filename;
+        
         // Создаем директорию для логов, если её нет
-        if (!is_dir($this->logPath)) {
-            mkdir($this->logPath, 0777, true);
+        $logDir = dirname($this->logFile);
+        if (!is_dir($logDir)) {
+            mkdir($logDir, 0755, true);
         }
-
-        $this->logFile = $this->logPath . $logFileName;
     }
 
     /**

@@ -1,6 +1,9 @@
 <?php
 
+namespace App\Models;   
 
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
 
 class Distributor
 {
@@ -12,8 +15,10 @@ class Distributor
 
     public function __construct()
     {
+        $this->logger = new Logger('distributor');
+
         $this->db = Database::getInstance()->getConnection();
-        $this->logger = new Logger('distributor.log');
+
         $this->queueModel = new Queue();
         $this->managerModel = new Manager();
         $this->orderTracker = new OrderTracker();
@@ -267,7 +272,7 @@ class Distributor
             $stmt->bindParam(':status', $status, PDO::PARAM_STR);
 
             return $stmt->execute();
-        } catch (PDOException $e) {
+        } catch (\PDOException $e) {
             $this->logger->error("Error logging distribution: " . $e->getMessage());
             return false;
         }

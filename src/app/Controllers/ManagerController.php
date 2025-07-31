@@ -1,6 +1,9 @@
 <?php
 
-
+namespace App\Controllers;
+use App\Models\Manager;
+use App\Services\Bitrix24Service;
+use App\Services\RetailCRMService;
 
 
 class ManagerController extends BaseController

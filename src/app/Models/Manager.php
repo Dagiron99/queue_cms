@@ -1,13 +1,22 @@
 <?php
 
+namespace App\Models;
+
+use Monolog\Logger;
+use Monolog\Handler\StreamHandler;
+use App\Services\DatabaseService;
 
 class Manager
 {
     private $db;
+    private $logger;
+
 
     public function __construct()
     {
-        $this->db = Database::getInstance()->getConnection();
+        $this->logger = new Logger('manager');
+
+        $this->db = DatabaseService::getInstance()->getConnection();
     }
 
     /**
@@ -16,26 +25,26 @@ class Manager
     public function getAllManagers()
     {
         try {
-            $stmt = $this->db->query("
-                SELECT 
-                    id,
-                    name,
-                    bitrix24_id,
-                    retailcrm_id,
-                    status,
-                    COALESCE(current_load, 0) AS current_load,
-                    COALESCE(is_active, 0) AS is_active,
-                    created_at,
-                    updated_at
-                FROM managers
-                ORDER BY name ASC
-            ");
-
+            $db = $this->db;
+            $query = "SELECT * FROM managers WHERE is_active = 1"; // Проблема может быть здесь
+            
+            $stmt = $db->prepare($query);
+            $stmt->execute();
+            
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
-            logToFile("Error getting all managers: " . $e->getMessage(), 'app.log');
+            // Добавьте логирование
+            $this->logger->error("Error getting managers: " . $e->getMessage());
             return [];
         }
+    }
+
+    /**
+     * Получение всех менеджеров (алиас для совместимости)
+     */
+    public function getAll()
+    {
+        return $this->getAllManagers();
     }
 
     /**
@@ -50,7 +59,7 @@ class Manager
 
             return $stmt->fetch(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
-            logToFile("Error getting manager by ID: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error getting manager by ID: " . $e->getMessage());
             return false;
         }
     }
@@ -69,7 +78,7 @@ class Manager
 
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
-            logToFile("Error getting active managers: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error getting active managers: " . $e->getMessage());
             return [];
         }
     }
@@ -88,7 +97,7 @@ class Manager
 
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
-            logToFile("Error getting inactive managers: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error getting inactive managers: " . $e->getMessage());
             return [];
         }
     }
@@ -100,23 +109,40 @@ class Manager
     {
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO managers (name, bitrix24_id, retailcrm_id, is_active, created_at)
-                VALUES (:name, :bitrix24_id, :retailcrm_id, :is_active, NOW())
+                INSERT INTO managers (
+                    name, 
+                    bitrix24_id, 
+                    retailcrm_id, 
+                    is_active, 
+                    specializations,
+                    created_at
+                )
+                VALUES (
+                    :name, 
+                    :bitrix24_id, 
+                    :retailcrm_id, 
+                    :is_active, 
+                    :specializations,
+                    NOW()
+                )
             ");
 
             $name = $data['name'];
             $bitrix24_id = !empty($data['bitrix24_id']) ? (int) $data['bitrix24_id'] : null;
             $retailcrm_id = !empty($data['retailcrm_id']) ? (int) $data['retailcrm_id'] : null;
             $is_active = isset($data['is_active']) ? 1 : 0;
+            $specializations = isset($data['specializations']) ? json_encode($data['specializations']) : '[]';
 
             $stmt->bindParam(':name', $name, \PDO::PARAM_STR);
             $stmt->bindParam(':bitrix24_id', $bitrix24_id, \PDO::PARAM_INT);
             $stmt->bindParam(':retailcrm_id', $retailcrm_id, \PDO::PARAM_INT);
             $stmt->bindParam(':is_active', $is_active, \PDO::PARAM_INT);
+            $stmt->bindParam(':specializations', $specializations, \PDO::PARAM_STR);
 
-            return $stmt->execute();
+            $result = $stmt->execute();
+            return $result ? $this->db->lastInsertId() : false;
         } catch (\PDOException $e) {
-            logToFile("Error adding manager: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error adding manager: " . $e->getMessage());
             return false;
         }
     }
@@ -150,7 +176,7 @@ class Manager
 
             return $stmt->execute();
         } catch (\PDOException $e) {
-            logToFile("Error updating manager: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error updating manager: " . $e->getMessage());
             return false;
         }
     }
@@ -170,11 +196,16 @@ class Manager
             $stmt->execute();
 
             // 2. Удаляем связи менеджера с очередями
-            $stmt = $this->db->prepare("DELETE FROM queue_manager WHERE manager_id = :id");
+            $stmt = $this->db->prepare("DELETE FROM queue_manager_relations WHERE manager_id = :id");
             $stmt->bindParam(':id', $id, \PDO::PARAM_INT);
             $stmt->execute();
 
-            // 3. Теперь удаляем самого менеджера
+            // 3. Удаляем специализации менеджера
+            $stmt = $this->db->prepare("DELETE FROM manager_specializations WHERE manager_id = :id");
+            $stmt->bindParam(':id', $id, \PDO::PARAM_INT);
+            $stmt->execute();
+
+            // 4. Теперь удаляем самого менеджера
             $stmt = $this->db->prepare("DELETE FROM managers WHERE id = :id");
             $stmt->bindParam(':id', $id, \PDO::PARAM_INT);
             $stmt->execute();
@@ -185,7 +216,7 @@ class Manager
         } catch (\PDOException $e) {
             // Если возникла ошибка, откатываем все изменения
             $this->db->rollBack();
-            logToFile("Error deleting manager: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error deleting manager: " . $e->getMessage());
             return false;
         }
     }
@@ -198,7 +229,8 @@ class Manager
         try {
             $stmt = $this->db->prepare("
                 UPDATE managers 
-                SET status = :status
+                SET status = :status,
+                    updated_at = NOW()
                 WHERE id = :id
             ");
 
@@ -207,7 +239,7 @@ class Manager
 
             return $stmt->execute();
         } catch (\PDOException $e) {
-            logToFile("Error updating manager status: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error updating manager status: " . $e->getMessage());
             return false;
         }
     }
@@ -233,7 +265,7 @@ class Manager
 
             return $stmt->fetchAll(\PDO::FETCH_ASSOC);
         } catch (\PDOException $e) {
-            logToFile("Error getting distribution stats by day: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error getting distribution stats by day: " . $e->getMessage());
             return [];
         }
     }
@@ -246,7 +278,7 @@ class Manager
         try {
             $stmt = $this->db->prepare("
                 SELECT is_fallback 
-                FROM queue_manager 
+                FROM queue_manager_relations 
                 WHERE manager_id = :manager_id AND queue_id = :queue_id
             ");
 
@@ -257,29 +289,125 @@ class Manager
             $result = $stmt->fetch(\PDO::FETCH_ASSOC);
             return $result ? $result['is_fallback'] : 0;
         } catch (\PDOException $e) {
-            logToFile("Error getting manager fallback status: " . $e->getMessage(), 'app.log');
+            $this->logger->error("Error getting manager fallback status: " . $e->getMessage());
             return 0;
         }
     }
+
+    /**
+     * Получение доступных менеджеров для очереди
+     */
     public function getAvailableManagersForQueue($queueId)
     {
-        // Получить менеджеров, которые активны и не состоят в очереди $queueId
-        $stmt = $this->db->prepare("
-            SELECT m.id, m.name
-            FROM managers m
-            WHERE m.is_active = 1
-              AND m.id NOT IN (
-                  SELECT manager_id FROM queue_manager_relations WHERE queue_id = :queue_id AND is_active = 1
-              )
-            ORDER BY m.name
-        ");
-        $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
-        $stmt->execute();
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            // Получить менеджеров, которые активны и не состоят в очереди $queueId
+            $stmt = $this->db->prepare("
+                SELECT m.id, m.name, m.specializations
+                FROM managers m
+                WHERE m.is_active = 1
+                  AND m.id NOT IN (
+                      SELECT manager_id FROM queue_manager_relations WHERE queue_id = :queue_id AND is_active = 1
+                  )
+                ORDER BY m.name
+            ");
+            $stmt->bindParam(':queue_id', $queueId, \PDO::PARAM_INT);
+            $stmt->execute();
+            return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            $this->logger->error("Error getting available managers for queue: " . $e->getMessage());
+            return [];
+        }
     }
+
+    /**
+     * Получение всех доступных менеджеров
+     */
     public function getAvailableManagers()
     {
-        $stmt = $this->db->query("SELECT id, name FROM managers WHERE is_active = 1 ORDER BY name");
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $stmt = $this->db->query("
+                SELECT id, name, specializations 
+                FROM managers 
+                WHERE is_active = 1 
+                ORDER BY name
+            ");
+            return $stmt->fetchAll(\PDO::FETCH_ASSOC);
+        } catch (\PDOException $e) {
+            $this->logger->error("Error getting available managers: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Обновление специализаций менеджера
+     */
+    public function updateSpecializations($managerId, $specializations)
+    {
+        try {
+            // Начинаем транзакцию
+            $this->db->beginTransaction();
+            
+            // Удаляем старые специализации
+            $stmt = $this->db->prepare("DELETE FROM manager_specializations WHERE manager_id = :manager_id");
+            $stmt->bindParam(':manager_id', $managerId, \PDO::PARAM_INT);
+            $stmt->execute();
+            
+            // Добавляем новые специализации
+            if (!empty($specializations)) {
+                $insertStmt = $this->db->prepare("
+                    INSERT INTO manager_specializations (manager_id, category, created_at) 
+                    VALUES (:manager_id, :category, NOW())
+                ");
+                
+                foreach ($specializations as $category) {
+                    $insertStmt->bindParam(':manager_id', $managerId, \PDO::PARAM_INT);
+                    $insertStmt->bindParam(':category', $category, \PDO::PARAM_STR);
+                    $insertStmt->execute();
+                }
+            }
+            
+            // Обновляем JSON-представление в таблице менеджеров для быстрого доступа
+            $specJson = json_encode($specializations);
+            $updateStmt = $this->db->prepare("
+                UPDATE managers 
+                SET specializations = :specializations,
+                    updated_at = NOW()
+                WHERE id = :manager_id
+            ");
+            $updateStmt->bindParam(':specializations', $specJson, \PDO::PARAM_STR);
+            $updateStmt->bindParam(':manager_id', $managerId, \PDO::PARAM_INT);
+            $updateStmt->execute();
+            
+            // Завершаем транзакцию
+            $this->db->commit();
+            
+            $this->logger->info("Специализации менеджера ID:$managerId успешно обновлены");
+            return true;
+        } catch (\Exception $e) {
+            // Откатываем транзакцию в случае ошибки
+            $this->db->rollBack();
+            $this->logger->error("Ошибка при обновлении специализаций: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Получение всех категорий для специализаций
+     */
+    public function getAllCategories()
+    {
+        // Это может быть статический список или данные из другой таблицы
+        return [
+            'Электроника',
+            'Одежда',
+            'Бытовая техника',
+            'Мебель',
+            'Продукты питания',
+            'Косметика',
+            'Спортивные товары',
+            'Детские товары',
+            'Автотовары',
+            'Книги и канцтовары'
+        ];
     }
 }
