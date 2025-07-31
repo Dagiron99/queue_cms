@@ -1,0 +1,28 @@
+# Зависимости
+/src/vendor/
+/src/node_modules/
+
+# Кэш
+/src/cache/
+*.cache
+
+# Логи
+/src/storage/logs/*.log
+/src/storage/temp/*
+
+# Настройки окружения
+/.env
+/src/.env
+*.env
+!/.env.example
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.swp
+
+# IDE
+.idea/
+.vscode/

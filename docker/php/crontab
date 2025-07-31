@@ -1,0 +1,10 @@
+# Проверка статусов заказов каждые 15 минут
+*/15 * * * * php /var/www/html/public/cron.php check_orders >> /var/www/html/storage/logs/cron.log 2>&1
+
+# Синхронизация менеджеров из внешних систем каждый час
+0 * * * * php /var/www/html/public/cron.php sync_managers >> /var/www/html/storage/logs/cron.log 2>&1
+
+# Очистка старых логов каждый день в 1:00
+0 1 * * * php /var/www/html/public/cron.php clean_logs >> /var/www/html/storage/logs/cron.log 2>&1
+
+# Пустая строка в конце файла

@@ -1,0 +1,95 @@
+/* Стили для страницы логов */
+.log-container {
+    background-color: #272822;
+    color: #f8f8f2;
+    padding: 15px;
+    border-radius: 5px;
+    max-height: 600px;
+    overflow-y: auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    position: relative;
+}
+
+.log-container pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    color: #f8f8f2;
+}
+
+.log-controls {
+    margin-bottom: 1rem;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+}
+
+.log-container .text-danger {
+    color: #f92672 !important;
+}
+
+.log-container .text-warning {
+    color: #e6db74 !important;
+}
+
+.log-container .text-success {
+    color: #a6e22e !important;
+}
+
+.log-container .text-info {
+    color: #66d9ef !important;
+}
+
+.log-container .text-primary {
+    color: #ae81ff !important;
+}
+
+.log-search {
+    position: sticky;
+    top: 0;
+    background-color: #272822;
+    padding: 10px 0;
+    z-index: 10;
+}
+
+.log-search input {
+    background-color: #3e3d32;
+    border: 1px solid #49483e;
+    color: #f8f8f2;
+}
+
+.log-search input::placeholder {
+    color: rgba(248, 248, 242, 0.5);
+}
+
+.highlight {
+    background-color: #49483e;
+}
+
+.log-line {
+    padding: 2px 0;
+}
+
+.log-line:hover {
+    background-color: #3e3d32;
+}
+
+/* Настройка полосы прокрутки */
+.log-container::-webkit-scrollbar {
+    width: 8px;
+}
+
+.log-container::-webkit-scrollbar-track {
+    background: #3e3d32;
+}
+
+.log-container::-webkit-scrollbar-thumb {
+    background-color: #75715e;
+    border-radius: 4px;
+}
+
+.log-container::-webkit-scrollbar-thumb:hover {
+    background-color: #a59f85;
+}

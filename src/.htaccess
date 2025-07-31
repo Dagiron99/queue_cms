@@ -1,0 +1,42 @@
+# Включение mod_rewrite
+RewriteEngine On
+
+# Устанавливаем базовый URL
+RewriteBase /
+
+# Если запрашиваемый файл или директория не существуют
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Перенаправляем все запросы на index.php
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Настройки PHP
+php_flag display_errors On
+php_value error_reporting E_ALL
+
+# Установка кодировки
+AddDefaultCharset UTF-8
+
+# Безопасность
+Options -Indexes
+ServerSignature Off
+
+# Запрет доступа к определенным директориям
+<FilesMatch "^\.">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Запрет доступа к файлам конфигурации
+<FilesMatch "^(config\.php|database\.php)$">
+    Order allow,deny
+    Deny from all
+</FilesMatch>
+
+# Защита от XSS атак
+<IfModule mod_headers.c>
+    Header set X-XSS-Protection "1; mode=block"
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+</IfModule>
