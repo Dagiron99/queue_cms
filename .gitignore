@@ -1,28 +1,45 @@
-# Зависимости
-/src/vendor/
-/src/node_modules/
-
-# Кэш
-/src/cache/
-*.cache
-
-# Логи
+# Logs
 /src/storage/logs/*.log
-/src/storage/temp/*
+/src/storage/logs/**/*.log
 
-# Настройки окружения
-/.env
-/src/.env
-*.env
-!/.env.example
+# Cache
+/src/cache/*
+!/src/cache/.gitkeep
 
-# Системные файлы
-.DS_Store
-Thumbs.db
-*.log
-*.tmp
-*.swp
+# Vendor (composer dependencies)
+/src/vendor/*
+!/src/vendor/.gitkeep
 
-# IDE
+# Database configurations
+/src/config/database.php
+/src/config/*.local.php
+
+# Environment files
+.env
+.env.*
+!.env.example
+/src/config/*.local.php
+
+# Database backups
+*.sql
+*.dump
+
+# Docker
+docker-compose.override.yml
+
+# IDE and OS specific files
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# PHP specific
+composer.phar
+composer.lock
+
+# Temp files
+*.tmp
+*.temp
+*.bak
