@@ -306,4 +306,145 @@ class ApiController extends BaseController
 
         return $this->json($result);
     }
+    /**
+ * Обработка webhook от RetailCRM
+ */
+public function processRetailCRMWebhook()
+{
+    $this->logger->info('Received RetailCRM webhook');
+
+    // Получаем данные запроса
+    $input = file_get_contents('php://input');
+
+    if (empty($input)) {
+        $this->logger->error('Empty webhook data');
+        return $this->json([
+            'success' => false,
+            'message' => 'Empty webhook data'
+        ], 400);
+    }
+
+    // Декодируем JSON
+    $data = json_decode($input, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        $this->logger->error('Invalid JSON in webhook: ' . json_last_error_msg());
+        return $this->json([
+            'success' => false,
+            'message' => 'Invalid JSON: ' . json_last_error_msg()
+        ], 400);
+    }
+
+    // Логируем данные
+    $this->logger->info('RetailCRM webhook data: ' . json_encode($data));
+
+    // Определяем тип события
+    $topic = $data['topic'] ?? '';
+
+    switch ($topic) {
+        case 'orders.create':
+            return $this->handleRetailCRMOrderCreate($data);
+            
+        case 'orders.status.changed':
+            return $this->handleRetailCRMStatusChanged($data);
+            
+        default:
+            $this->logger->warning('Unsupported RetailCRM event: ' . $topic);
+            return $this->json([
+                'success' => false,
+                'message' => 'Unsupported event: ' . $topic
+            ]);
+    }
+}
+
+/**
+ * Обработка создания заказа в RetailCRM
+ */
+private function handleRetailCRMOrderCreate($data)
+{
+    // Извлекаем данные заказа
+    $order = $data['payload']['order'] ?? null;
+    
+    if (!$order || !isset($order['id'])) {
+        $this->logger->error('Order data not found in webhook');
+        return $this->json([
+            'success' => false,
+            'message' => 'Order data not found'
+        ]);
+    }
+    
+    // Формируем данные для обработки
+    $orderData = [
+        'order_id' => 'retailcrm_' . $order['id'],
+        'title' => 'Заказ #' . $order['number'],
+        'price' => $order['totalSumm'] ?? 0,
+        'items' => $order['items'] ?? [],
+        'customer' => [
+            'name' => $order['firstName'] ?? '',
+            'phone' => $order['phone'] ?? '',
+            'email' => $order['email'] ?? ''
+        ],
+        'source' => 'retailcrm',
+        'callback_requested' => isset($order['customFields']['callback_required']) && $order['customFields']['callback_required'] === 'yes',
+        'raw_data' => $order
+    ];
+    
+    // Передаем заказ в сервис распределения
+    $result = $this->distributionService->processOrder($orderData, 'retailcrm');
+    
+    // Логируем результат
+    $this->logger->info('RetailCRM order distribution result: ' . json_encode($result));
+    
+    return $this->json($result);
+}
+
+/**
+ * Обработка изменения статуса заказа в RetailCRM
+ */
+private function handleRetailCRMStatusChanged($data)
+{
+    // Извлекаем данные
+    $order = $data['payload']['order'] ?? null;
+    
+    if (!$order || !isset($order['id'])) {
+        $this->logger->error('Order data not found in webhook');
+        return $this->json([
+            'success' => false,
+            'message' => 'Order data not found'
+        ]);
+    }
+    
+    // Формируем ID заказа в том же формате, как при создании
+    $orderId = 'retailcrm_' . $order['id'];
+    
+    // Получаем новый статус
+    $retailCrmStatus = $order['status'] ?? 'new';
+    
+    // Маппинг статусов RetailCRM на внутренние
+    $statusMapping = [
+        'new' => 'new',
+        'approval' => 'processing',
+        'assembling' => 'processing',
+        'ready-for-delivery' => 'processing',
+        'delivering' => 'processing',
+        'complete' => 'completed',
+        'canceled' => 'cancelled'
+    ];
+    
+    $mappedStatus = $statusMapping[$retailCrmStatus] ?? 'processing';
+    
+    // Обновляем статус
+    $result = $this->distributionService->updateOrderStatus(
+        $orderId,
+        $mappedStatus,
+        'retailcrm',
+        [
+            'retailcrm_status' => $retailCrmStatus,
+            'order_number' => $order['number'] ?? '',
+            'changed_at' => date('Y-m-d H:i:s')
+        ]
+    );
+    
+    return $this->json($result);
+}
 }
