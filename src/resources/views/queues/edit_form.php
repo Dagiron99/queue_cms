@@ -16,12 +16,26 @@
                     </div>
 
                     <div class="mb-3">
-                        <label for="edit_type" class="form-label">Тип очереди</label>
-                        <select class="form-select" id="edit_type" name="type" required>
-                            <option value="force">Force</option>
-                            <option value="online">Online</option>
-                            <option value="online-fallback">Online-Fallback</option>
+                        <label for="type" class="form-label">Тип очереди (алгоритм распределения)</label>
+                        <select class="form-select" id="type" name="type" required>
+                            <option value="force" <?php echo $queue['type'] == 'force' ? 'selected' : ''; ?>>
+                                Force (Round Robin) - распределение по кругу
+                            </option>
+                            <option value="online" <?php echo $queue['type'] == 'online' ? 'selected' : ''; ?>>
+                                Online - только между онлайн менеджерами
+                            </option>
+                            <option value="online_fallback" <?php echo $queue['type'] == 'online_fallback' ? 'selected' : ''; ?>>
+                                Online + Fallback - с переключением на резервных менеджеров
+                            </option>
                         </select>
+                        <div class="form-text">
+                            <strong>Force (Round Robin)</strong>: заказы распределяются по кругу между всеми активными
+                            менеджерами.<br>
+                            <strong>Online</strong>: заказы распределяются только между менеджерами в статусе "онлайн".
+                            Если нет онлайн-менеджеров, заказ остается без назначения.<br>
+                            <strong>Online + Fallback</strong>: сначала заказы распределяются между онлайн-менеджерами.
+                            Если все менеджеры оффлайн, то используются резервные менеджеры (fallback).
+                        </div>
                     </div>
 
                     <div class="mb-3">

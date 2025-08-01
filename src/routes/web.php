@@ -43,3 +43,6 @@ $router->post('/api/test-connection', ['SettingsController', 'testConnection']);
 
 // Отслеживание заказов
 $router->get('/orders_tracking', ['OrderTrackingController', 'index']);
+
+$router->get('/tests', ['TestController', 'index']);
+$router->post('/tests/distribution', ['TestController', 'testDistribution']);

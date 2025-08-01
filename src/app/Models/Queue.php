@@ -271,36 +271,35 @@ class Queue
 
     /**
      * Получение активных менеджеров для очереди с их нагрузкой
-     */
-    public function getActiveManagersForQueue($queueId)
-    {
-        try {
-            $stmt = $this->db->prepare("
-                SELECT 
-                    m.id,
-                    m.name,
-                    m.bitrix24_id,
-                    m.retailcrm_id,
-                    m.current_load,
-                    m.max_load,
-                    m.is_active,
-                    COALESCE(qmr.max_load, 2) as queue_max_load,
-                    COALESCE(qmr.current_load, 0) as queue_current_load
-                FROM managers m
-                LEFT JOIN queue_manager_relations qmr ON m.id = qmr.manager_id AND qmr.queue_id = :queue_id
-                WHERE m.is_active = 1 AND (qmr.is_active = 1 OR qmr.id IS NULL)
-                ORDER BY m.name ASC
-            ");
-
-            $stmt->bindParam(':queue_id', $queueId, \PDO::PARAM_INT);
-            $stmt->execute();
-
-            return $stmt->fetchAll(\PDO::FETCH_ASSOC);
-        } catch (\PDOException $e) {
-            logToFile("Error getting active managers for queue: " . $e->getMessage(), 'queue.log');
-            return [];
-        }
+     */public function getActiveManagersForQueue($queueId)
+{
+    try {
+        $stmt = $this->db->prepare("
+            SELECT 
+                m.*,
+                qmr.max_load as queue_max_load,
+                qmr.current_load as queue_current_load,
+                qmr.is_fallback
+            FROM 
+                managers m
+            JOIN 
+                queue_manager_relations qmr ON m.id = qmr.manager_id
+            WHERE 
+                qmr.queue_id = :queue_id AND
+                m.is_active = 1
+            ORDER BY 
+                m.id
+        ");
+        
+        $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
+        $stmt->execute();
+        
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error getting active managers for queue: " . $e->getMessage());
+        return [];
     }
+}
 
 
 

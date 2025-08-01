@@ -2,328 +2,571 @@
 
 
 
+use PDO;
+use Exception;
+
 class Distributor
 {
     private $db;
-    private $logger;
-    private $queueModel;
-    private $managerModel;
-    private $orderTracker;
+    private $logModel;
 
-    public function __construct()
+    public function __construct(PDO $db, $logModel = null)
     {
-        $this->db = Database::getInstance()->getConnection();
-        $this->logger = new Logger('distributor.log');
-        $this->queueModel = new Queue();
-        $this->managerModel = new Manager();
-        $this->orderTracker = new OrderTracker();
+        $this->db = $db;
+        $this->logModel = $logModel;
     }
 
-    /**
-     * Распределение заказа по очереди
-     * 
-     * @param array $orderData Данные заказа
-     * @param int $queueId ID очереди
-     * @return array Результат распределения
-     */
-    public function distributeOrder($orderData, $queueId)
-    {
-        // Логируем начало распределения
-        $this->logger->info("Starting distribution for order {$orderData['order_id']} to queue $queueId");
-
-        // Получаем информацию о очереди
-        $queue = $this->queueModel->getQueueById($queueId);
+ /**
+ * Распределяет заказ по соответствующему алгоритму
+ * 
+ * @param int $queueId ID очереди
+ * @param string $orderId ID заказа
+ * @return array|false Информация о назначении или false в случае ошибки
+ */
+public function distributeOrder($queueId, $orderId)
+{
+    try {
+        // Получаем информацию об очереди
+        $queue = $this->getQueueById($queueId);
+        
         if (!$queue) {
-            $this->logger->error("Queue $queueId not found");
-            return [
-                'success' => false,
-                'message' => "Queue $queueId not found",
-                'order_id' => $orderData['order_id']
-            ];
-        }
-
-        // Проверяем, активна ли очередь
-        if (!$queue['is_active']) {
-            $this->logger->warning("Queue $queueId is not active");
-            return [
-                'success' => false,
-                'message' => "Queue $queueId is not active",
-                'order_id' => $orderData['order_id']
-            ];
-        }
-
-        // Выбираем подходящего менеджера
-        $manager = $this->selectManager($queueId, $queue['algorithm']);
-
-        if (!$manager) {
-            $this->logger->error("No suitable manager found for queue $queueId");
-            return [
-                'success' => false,
-                'message' => "No suitable manager found",
-                'order_id' => $orderData['order_id']
-            ];
-        }
-
-        // Логируем результат выбора менеджера
-        $this->logger->info("Selected manager #{$manager['id']} ({$manager['name']}) for order {$orderData['order_id']}");
-
-        // Обновляем нагрузку менеджера
-        $this->queueModel->incrementManagerLoad($queueId, $manager['id']);
-
-        // Добавляем заказ в систему отслеживания
-        $trackingData = [
-            'order_id' => $orderData['order_id'],
-            'platform' => $orderData['platform'] ?? 'unknown',
-            'status' => 'new',
-            'manager_id' => $manager['id'],
-            'queue_id' => $queueId,
-            'data' => $orderData
-        ];
-
-        $this->orderTracker->addOrder($trackingData);
-
-        // Логируем запись о распределении
-        $this->logDistribution($orderData['order_id'], $queueId, $manager['id'], 'success');
-
-        return [
-            'success' => true,
-            'message' => "Order successfully distributed",
-            'order_id' => $orderData['order_id'],
-            'manager' => [
-                'id' => $manager['id'],
-                'name' => $manager['name'],
-                'bitrix24_id' => $manager['bitrix24_id'],
-                'retailcrm_id' => $manager['retailcrm_id']
-            ]
-        ];
-    }
-
-    /**
-     * Выбор менеджера для распределения
-     * 
-     * @param int $queueId ID очереди
-     * @param string $algorithm Алгоритм распределения
-     * @return array|false Данные менеджера или false, если не найден
-     */
-    private function selectManager($queueId, $algorithm)
-    {
-        $this->logger->info("Selecting manager for queue $queueId using algorithm '$algorithm'");
-
-        // Получаем активных менеджеров для очереди
-        $managers = $this->queueModel->getActiveManagersForQueue($queueId);
-
-        if (empty($managers)) {
-            $this->logger->warning("No active managers found for queue $queueId");
+            $this->logDistribution($queueId, null, $orderId, 'error', 'Очередь не найдена');
             return false;
         }
-
-        // Выбираем менеджера в зависимости от алгоритма
-        switch ($algorithm) {
-            case 'round_robin':
-                return $this->roundRobinSelection($queueId, $managers);
-
-            case 'least_busy':
-                return $this->leastBusySelection($managers);
-
-            case 'random':
-                return $this->randomSelection($managers);
-
-            default:
-                $this->logger->warning("Unknown algorithm '$algorithm', using round robin as default");
-                return $this->roundRobinSelection($queueId, $managers);
+        
+        if (!$queue['is_active']) {
+            $this->logDistribution($queueId, null, $orderId, 'error', 'Очередь неактивна');
+            return false;
         }
+        
+        // Вызываем соответствующий метод распределения в зависимости от типа очереди
+        switch ($queue['type']) {
+            case 'force':
+                return $this->roundRobinDistribution($queue, $orderId);
+            case 'online':
+                return $this->onlineDistribution($queue, $orderId);
+            case 'online_fallback':
+                return $this->onlineFallbackDistribution($queue, $orderId);
+            default:
+                $this->logDistribution($queueId, null, $orderId, 'error', 'Неизвестный тип очереди: ' . $queue['type']);
+                return false;
+        }
+    } catch (Exception $e) {
+        $this->logDistribution($queueId, null, $orderId, 'error', 'Ошибка распределения: ' . $e->getMessage());
+        return false;
     }
+}
 
     /**
-     * Алгоритм распределения Round Robin
+     * Алгоритм распределения Round Robin (Force)
      */
-    private function roundRobinSelection($queueId, $managers)
+    private function roundRobinDistribution($queue, $orderId)
     {
-        $this->logger->info("Using Round Robin algorithm for queue $queueId");
-
-        // Получаем текущую позицию в очереди
-        $queue = $this->queueModel->getQueueById($queueId);
-        $currentPosition = $queue['current_position'];
-
-        // Если позиция больше количества менеджеров, сбрасываем её
-        if ($currentPosition > count($managers)) {
-            $currentPosition = 1;
+        // Получаем активных менеджеров для очереди
+        $managers = $this->getActiveManagersForQueue($queue['id']);
+        
+        if (empty($managers)) {
+            $this->logDistribution($queue['id'], null, $orderId, 'error', 'Нет активных менеджеров в очереди');
+            return false;
         }
-
-        // Выбираем менеджера по текущей позиции
-        $selectedManager = $managers[$currentPosition - 1];
-
-        // Проверяем, не превышена ли максимальная нагрузка менеджера
-        if ($selectedManager['queue_current_load'] >= $selectedManager['queue_max_load']) {
-            $this->logger->warning("Manager #{$selectedManager['id']} has reached maximum load, trying next");
-
-            // Ищем следующего доступного менеджера
-            $found = false;
-            $startPosition = $currentPosition;
-
+        
+        // Определяем следующего менеджера по позиции в очереди
+        $position = $queue['current_position'];
+        $totalManagers = count($managers);
+        
+        // Убеждаемся, что позиция находится в пределах массива
+        if ($position >= $totalManagers) {
+            $position = 0;
+        }
+        
+        $manager = $managers[$position];
+        
+        // Проверяем, не превышена ли максимальная нагрузка менеджера в этой очереди
+        if ($manager['queue_current_load'] >= $manager['queue_max_load']) {
+            // Ищем следующего менеджера, который не перегружен
+            $startPosition = $position;
             do {
-                $currentPosition++;
-                if ($currentPosition > count($managers)) {
-                    $currentPosition = 1;
+                $position = ($position + 1) % $totalManagers;
+                $manager = $managers[$position];
+                
+                if ($manager['queue_current_load'] < $manager['queue_max_load']) {
+                    break;
                 }
-
-                if ($currentPosition == $startPosition) {
-                    $this->logger->error("All managers are at maximum load");
+                
+                // Если мы вернулись к начальной позиции, значит все менеджеры перегружены
+                if ($position == $startPosition) {
+                    $this->logDistribution($queue['id'], null, $orderId, 'error', 'Все менеджеры в очереди перегружены');
                     return false;
                 }
+            } while (true);
+        }
+        
+        // Увеличиваем текущую позицию в очереди для следующего заказа
+        $nextPosition = ($position + 1) % $totalManagers;
+        $this->updateQueuePosition($queue['id'], $nextPosition);
+        
+        // Назначаем заказ менеджеру
+        $result = $this->assignOrderToManager($queue['id'], $manager['id'], $orderId);
+        
+        if ($result) {
+            $this->logDistribution(
+                $queue['id'], 
+                $manager['id'], 
+                $orderId, 
+                'success', 
+                "Заказ назначен менеджеру {$manager['name']} по алгоритму Round Robin"
+            );
+            
+            return [
+                'queue_id' => $queue['id'],
+                'queue_name' => $queue['name'],
+                'manager_id' => $manager['id'],
+                'manager_name' => $manager['name'],
+                'algorithm' => 'round_robin',
+                'order_id' => $orderId
+            ];
+        } else {
+            $this->logDistribution(
+                $queue['id'], 
+                null, 
+                $orderId, 
+                'error', 
+                "Ошибка при назначении заказа менеджеру {$manager['name']}"
+            );
+            
+            return false;
+        }
+    }
 
-                $selectedManager = $managers[$currentPosition - 1];
-
-                if ($selectedManager['queue_current_load'] < $selectedManager['queue_max_load']) {
-                    $found = true;
+    /**
+     * Алгоритм распределения только между онлайн-менеджерами
+     */
+    private function onlineDistribution($queue, $orderId)
+    {
+        // Получаем активных менеджеров для очереди, которые онлайн
+        $managers = $this->getOnlineManagersForQueue($queue['id']);
+        
+        if (empty($managers)) {
+            $this->logDistribution(
+                $queue['id'], 
+                null, 
+                $orderId, 
+                'error', 
+                'Нет активных онлайн-менеджеров в очереди'
+            );
+            return false;
+        }
+        
+        // Определяем следующего менеджера по позиции в очереди
+        $position = $queue['current_position'];
+        $totalManagers = count($managers);
+        
+        // Убеждаемся, что позиция находится в пределах массива
+        if ($position >= $totalManagers) {
+            $position = 0;
+        }
+        
+        $manager = $managers[$position];
+        
+        // Проверяем, не превышена ли максимальная нагрузка менеджера в этой очереди
+        if ($manager['queue_current_load'] >= $manager['queue_max_load']) {
+            // Ищем следующего онлайн-менеджера, который не перегружен
+            $startPosition = $position;
+            do {
+                $position = ($position + 1) % $totalManagers;
+                $manager = $managers[$position];
+                
+                if ($manager['queue_current_load'] < $manager['queue_max_load']) {
+                    break;
                 }
-            } while (!$found);
+                
+                // Если мы вернулись к начальной позиции, значит все менеджеры перегружены
+                if ($position == $startPosition) {
+                    $this->logDistribution(
+                        $queue['id'], 
+                        null, 
+                        $orderId, 
+                        'error', 
+                        'Все онлайн-менеджеры в очереди перегружены'
+                    );
+                    return false;
+                }
+            } while (true);
         }
-
-        // Обновляем позицию в очереди
-        $nextPosition = $currentPosition + 1;
-        if ($nextPosition > count($managers)) {
-            $nextPosition = 1;
-        }
-
-        $this->queueModel->updateQueuePosition($queueId, $nextPosition);
-
-        return $selectedManager;
-    }
-
-    /**
-     * Алгоритм распределения Least Busy
-     */
-    private function leastBusySelection($managers)
-    {
-        $this->logger->info("Using Least Busy algorithm");
-
-        // Сортируем менеджеров по текущей нагрузке
-        usort($managers, function ($a, $b) {
-            $aLoadPercent = ($a['queue_current_load'] / $a['queue_max_load']) * 100;
-            $bLoadPercent = ($b['queue_current_load'] / $b['queue_max_load']) * 100;
-
-            return $aLoadPercent - $bLoadPercent;
-        });
-
-        // Проверяем, не превышена ли максимальная нагрузка у наименее загруженного менеджера
-        $selectedManager = $managers[0];
-
-        if ($selectedManager['queue_current_load'] >= $selectedManager['queue_max_load']) {
-            $this->logger->error("All managers are at maximum load");
+        
+        // Увеличиваем текущую позицию в очереди для следующего заказа
+        $nextPosition = ($position + 1) % $totalManagers;
+        $this->updateQueuePosition($queue['id'], $nextPosition);
+        
+        // Назначаем заказ менеджеру
+        $result = $this->assignOrderToManager($queue['id'], $manager['id'], $orderId);
+        
+        if ($result) {
+            $this->logDistribution(
+                $queue['id'], 
+                $manager['id'], 
+                $orderId, 
+                'success', 
+                "Заказ назначен онлайн-менеджеру {$manager['name']} по алгоритму Online"
+            );
+            
+            return [
+                'queue_id' => $queue['id'],
+                'queue_name' => $queue['name'],
+                'manager_id' => $manager['id'],
+                'manager_name' => $manager['name'],
+                'algorithm' => 'online',
+                'order_id' => $orderId
+            ];
+        } else {
+            $this->logDistribution(
+                $queue['id'], 
+                null, 
+                $orderId, 
+                'error', 
+                "Ошибка при назначении заказа онлайн-менеджеру {$manager['name']}"
+            );
+            
             return false;
         }
-
-        return $selectedManager;
     }
 
     /**
-     * Алгоритм случайного распределения
+     * Алгоритм распределения с переключением на резервных менеджеров
      */
-    private function randomSelection($managers)
+    private function onlineFallbackDistribution($queue, $orderId)
     {
-        $this->logger->info("Using Random algorithm");
-
-        // Отфильтровываем менеджеров, у которых не превышена максимальная нагрузка
-        $availableManagers = array_filter($managers, function ($manager) {
-            return $manager['queue_current_load'] < $manager['queue_max_load'];
-        });
-
-        if (empty($availableManagers)) {
-            $this->logger->error("All managers are at maximum load");
+        // Сначала пробуем назначить заказ по алгоритму Online
+        $onlineManagers = $this->getOnlineManagersForQueue($queue['id']);
+        
+        if (!empty($onlineManagers)) {
+            $position = $queue['current_position'];
+            $totalManagers = count($onlineManagers);
+            
+            // Убеждаемся, что позиция находится в пределах массива
+            if ($position >= $totalManagers) {
+                $position = 0;
+            }
+            
+            $manager = $onlineManagers[$position];
+            
+            // Проверяем, не превышена ли максимальная нагрузка менеджера
+            if ($manager['queue_current_load'] < $manager['queue_max_load']) {
+                // Увеличиваем текущую позицию в очереди для следующего заказа
+                $nextPosition = ($position + 1) % $totalManagers;
+                $this->updateQueuePosition($queue['id'], $nextPosition);
+                
+                // Назначаем заказ менеджеру
+                $result = $this->assignOrderToManager($queue['id'], $manager['id'], $orderId);
+                
+                if ($result) {
+                    $this->logDistribution(
+                        $queue['id'], 
+                        $manager['id'], 
+                        $orderId, 
+                        'success', 
+                        "Заказ назначен онлайн-менеджеру {$manager['name']} по алгоритму Online-Fallback"
+                    );
+                    
+                    return [
+                        'queue_id' => $queue['id'],
+                        'queue_name' => $queue['name'],
+                        'manager_id' => $manager['id'],
+                        'manager_name' => $manager['name'],
+                        'algorithm' => 'online_fallback',
+                        'order_id' => $orderId
+                    ];
+                }
+            }
+        }
+        
+        // Если нет онлайн менеджеров или все перегружены, используем fallback-менеджеров
+        $fallbackManagers = $this->getFallbackManagersForQueue($queue['id']);
+        
+        if (empty($fallbackManagers)) {
+            $this->logDistribution(
+                $queue['id'], 
+                null, 
+                $orderId, 
+                'error', 
+                'Нет активных онлайн-менеджеров и резервных менеджеров в очереди'
+            );
             return false;
         }
-
-        // Выбираем случайного менеджера
-        $randomIndex = array_rand($availableManagers);
-        return $availableManagers[$randomIndex];
+        
+        // Используем Round Robin для fallback-менеджеров
+        $position = $queue['current_position'] % count($fallbackManagers);
+        $manager = $fallbackManagers[$position];
+        
+        // Проверяем, не превышена ли максимальная нагрузка менеджера
+        if ($manager['queue_current_load'] >= $manager['queue_max_load']) {
+            // Ищем следующего fallback-менеджера, который не перегружен
+            $startPosition = $position;
+            $totalFallback = count($fallbackManagers);
+            
+            do {
+                $position = ($position + 1) % $totalFallback;
+                $manager = $fallbackManagers[$position];
+                
+                if ($manager['queue_current_load'] < $manager['queue_max_load']) {
+                    break;
+                }
+                
+                // Если мы вернулись к начальной позиции, значит все fallback-менеджеры перегружены
+                if ($position == $startPosition) {
+                    $this->logDistribution(
+                        $queue['id'], 
+                        null, 
+                        $orderId, 
+                        'error', 
+                        'Все резервные менеджеры в очереди перегружены'
+                    );
+                    return false;
+                }
+            } while (true);
+        }
+        
+        // Увеличиваем текущую позицию в очереди для следующего заказа
+        $nextPosition = ($position + 1) % count($fallbackManagers);
+        $this->updateQueuePosition($queue['id'], $nextPosition);
+        
+        // Назначаем заказ менеджеру
+        $result = $this->assignOrderToManager($queue['id'], $manager['id'], $orderId);
+        
+        if ($result) {
+            $this->logDistribution(
+                $queue['id'], 
+                $manager['id'], 
+                $orderId, 
+                'success', 
+                "Заказ назначен резервному менеджеру {$manager['name']} по алгоритму Online-Fallback"
+            );
+            
+            return [
+                'queue_id' => $queue['id'],
+                'queue_name' => $queue['name'],
+                'manager_id' => $manager['id'],
+                'manager_name' => $manager['name'],
+                'algorithm' => 'online_fallback (fallback mode)',
+                'order_id' => $orderId
+            ];
+        } else {
+            $this->logDistribution(
+                $queue['id'], 
+                null, 
+                $orderId, 
+                'error', 
+                "Ошибка при назначении заказа резервному менеджеру {$manager['name']}"
+            );
+            
+            return false;
+        }
     }
 
     /**
-     * Логирование распределения
+     * Получение очереди по ID
      */
-    private function logDistribution($orderId, $queueId, $managerId, $status)
+    private function getQueueById($queueId)
     {
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO distribution_logs (
-                    order_id,
-                    queue_id,
-                    manager_id,
-                    status,
-                    created_at
-                ) VALUES (
-                    :order_id,
-                    :queue_id,
-                    :manager_id,
-                    :status,
-                    NOW()
-                )
+                SELECT * FROM queues
+                WHERE id = :id
             ");
-
-            $stmt->bindParam(':order_id', $orderId, PDO::PARAM_STR);
-            $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
-            $stmt->bindParam(':manager_id', $managerId, PDO::PARAM_INT);
-            $stmt->bindParam(':status', $status, PDO::PARAM_STR);
-
-            return $stmt->execute();
-        } catch (PDOException $e) {
-            $this->logger->error("Error logging distribution: " . $e->getMessage());
+            
+            $stmt->bindParam(':id', $queueId, PDO::PARAM_INT);
+            $stmt->execute();
+            
+            return $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            error_log("Error getting queue by ID: " . $e->getMessage());
             return false;
         }
     }
 
     /**
-     * Получение статистики распределения
+     * Получение активных менеджеров для очереди
      */
-    public function getDistributionStats($period = 'day', $limit = 7)
+    private function getActiveManagersForQueue($queueId)
     {
         try {
-            $dateFormat = '';
-            $groupBy = '';
-
-            switch ($period) {
-                case 'hour':
-                    $dateFormat = '%Y-%m-%d %H:00';
-                    $groupBy = "DATE_FORMAT(created_at, '%Y-%m-%d %H:00')";
-                    break;
-                case 'day':
-                    $dateFormat = '%Y-%m-%d';
-                    $groupBy = "DATE(created_at)";
-                    break;
-                case 'week':
-                    $dateFormat = '%Y-%u';
-                    $groupBy = "YEARWEEK(created_at)";
-                    break;
-                case 'month':
-                    $dateFormat = '%Y-%m';
-                    $groupBy = "DATE_FORMAT(created_at, '%Y-%m')";
-                    break;
-                default:
-                    $dateFormat = '%Y-%m-%d';
-                    $groupBy = "DATE(created_at)";
-            }
-
             $stmt = $this->db->prepare("
                 SELECT 
-                    DATE_FORMAT(created_at, :date_format) as period,
-                    COUNT(*) as count,
-                    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful,
-                    SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) as failed
-                FROM distribution_logs
-                GROUP BY $groupBy
-                ORDER BY period DESC
-                LIMIT :limit
+                    m.*,
+                    qmr.max_load as queue_max_load,
+                    qmr.current_load as queue_current_load,
+                    qmr.is_fallback
+                FROM 
+                    managers m
+                JOIN 
+                    queue_manager_relations qmr ON m.id = qmr.manager_id
+                WHERE 
+                    qmr.queue_id = :queue_id AND
+                    m.is_active = 1
+                ORDER BY 
+                    m.id
             ");
-
-            $stmt->bindParam(':date_format', $dateFormat, PDO::PARAM_STR);
-            $stmt->bindParam(':limit', $limit, PDO::PARAM_INT);
+            
+            $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
             $stmt->execute();
-
+            
             return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        } catch (PDOException $e) {
-            $this->logger->error("Error getting distribution stats: " . $e->getMessage());
+        } catch (Exception $e) {
+            error_log("Error getting active managers for queue: " . $e->getMessage());
             return [];
+        }
+    }
+
+    /**
+     * Получение онлайн-менеджеров для очереди
+     */
+    private function getOnlineManagersForQueue($queueId)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT 
+                    m.*,
+                    qmr.max_load as queue_max_load,
+                    qmr.current_load as queue_current_load,
+                    qmr.is_fallback
+                FROM 
+                    managers m
+                JOIN 
+                    queue_manager_relations qmr ON m.id = qmr.manager_id
+                WHERE 
+                    qmr.queue_id = :queue_id AND
+                    m.is_active = 1 AND
+                    m.is_online = 1
+                ORDER BY 
+                    m.id
+            ");
+            
+            $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
+            $stmt->execute();
+            
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            error_log("Error getting online managers for queue: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Получение резервных менеджеров для очереди
+     */
+    private function getFallbackManagersForQueue($queueId)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT 
+                    m.*,
+                    qmr.max_load as queue_max_load,
+                    qmr.current_load as queue_current_load,
+                    qmr.is_fallback
+                FROM 
+                    managers m
+                JOIN 
+                    queue_manager_relations qmr ON m.id = qmr.manager_id
+                WHERE 
+                    qmr.queue_id = :queue_id AND
+                    m.is_active = 1 AND
+                    qmr.is_fallback = 1
+                ORDER BY 
+                    m.id
+            ");
+            
+            $stmt->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
+            $stmt->execute();
+            
+            return $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            error_log("Error getting fallback managers for queue: " . $e->getMessage());
+            return [];
+        }
+    }
+
+    /**
+     * Обновление текущей позиции в очереди
+     */
+    private function updateQueuePosition($queueId, $position)
+    {
+        try {
+            $stmt = $this->db->prepare("
+                UPDATE queues
+                SET current_position = :position
+                WHERE id = :id
+            ");
+            
+            $stmt->bindParam(':id', $queueId, PDO::PARAM_INT);
+            $stmt->bindParam(':position', $position, PDO::PARAM_INT);
+            
+            return $stmt->execute();
+        } catch (Exception $e) {
+            error_log("Error updating queue position: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Назначение заказа менеджеру
+     */
+    private function assignOrderToManager($queueId, $managerId, $orderId)
+    {
+        try {
+            $this->db->beginTransaction();
+            
+            // Увеличиваем текущую нагрузку менеджера в очереди
+            $stmtUpdateQueueLoad = $this->db->prepare("
+                UPDATE queue_manager_relations
+                SET current_load = current_load + 1
+                WHERE queue_id = :queue_id AND manager_id = :manager_id
+            ");
+            
+            $stmtUpdateQueueLoad->bindParam(':queue_id', $queueId, PDO::PARAM_INT);
+            $stmtUpdateQueueLoad->bindParam(':manager_id', $managerId, PDO::PARAM_INT);
+            $stmtUpdateQueueLoad->execute();
+            
+            // Увеличиваем общую текущую нагрузку менеджера
+            $stmtUpdateManagerLoad = $this->db->prepare("
+                UPDATE managers
+                SET current_load = current_load + 1
+                WHERE id = :id
+            ");
+            
+            $stmtUpdateManagerLoad->bindParam(':id', $managerId, PDO::PARAM_INT);
+            $stmtUpdateManagerLoad->execute();
+            
+            // Здесь должен быть код для отправки информации о назначении во внешние системы
+            // (Bitrix24, RetailCRM и т.д.)
+            
+            $this->db->commit();
+            return true;
+        } catch (Exception $e) {
+            $this->db->rollBack();
+            error_log("Error assigning order to manager: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Запись в лог распределения
+     */
+    private function logDistribution($queueId, $managerId, $orderId, $status, $description)
+    {
+        if ($this->logModel) {
+            $logData = [
+                'queue_id' => $queueId,
+                'manager_id' => $managerId,
+                'order_id' => $orderId,
+                'status' => $status,
+                'description' => $description
+            ];
+            
+            return $this->logModel->addLog($logData);
+        } else {
+            // Если модель лога не передана, просто пишем в error_log
+            error_log("Distribution log: Queue ID: $queueId, Manager ID: $managerId, Order ID: $orderId, Status: $status, Description: $description");
+            return true;
         }
     }
 }

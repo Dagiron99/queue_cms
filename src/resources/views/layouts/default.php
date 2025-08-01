@@ -67,6 +67,12 @@
                                 Настройки
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link <?php echo strpos($_SERVER['REQUEST_URI'], '/tests') === 0 ? 'active' : ''; ?>" href="/tests">
+                                <i class="bi bi-gear me-2"></i>
+                                Тесты
+                            </a>
+                        </li>
                     </ul>
                     
                     <hr class="text-white-50">
