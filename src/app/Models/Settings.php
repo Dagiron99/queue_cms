@@ -1,16 +1,12 @@
 <?php
 
-namespace App\Models;   
-use App\Services\DatabaseService;
-use \PDO;
-
 class Settings
 {
     private $db;
     
     public function __construct()
     {
-        $this->db = DatabaseService::getInstance()->getConnection();
+        $this->db = Database::getInstance()->getConnection();
     }
     
     /**
@@ -37,7 +33,7 @@ class Settings
             
             return [];
             
-     } catch (\PDOException $e) {
+        } catch (PDOException $e) {
             error_log("Ошибка при получении настроек интеграции: " . $e->getMessage());
             return [];
         }
@@ -83,7 +79,7 @@ class Settings
             
             return $stmt->execute();
             
-        } catch (\PDOException $e) {
+        } catch (PDOException $e) {
             error_log("Ошибка при сохранении настроек интеграции: " . $e->getMessage());
             return false;
         }

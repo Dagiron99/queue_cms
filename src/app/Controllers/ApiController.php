@@ -1,37 +1,15 @@
 <?php
 
-namespace App\Controllers;
-
-use App\Services\DistributionService;
-use App\Services\Logger;
-use App\Models\Queue;
-use App\Services\ValidationService;
-use App\Services\QueueService;
 
 class ApiController extends BaseController
 {
     private $distributionService;
     private $logger;
-    private $validationService;
-    private $queueService;
 
     public function __construct()
     {
         $this->distributionService = new DistributionService();
         $this->logger = new Logger('api.log');
-        $this->validationService = new ValidationService();
-        $this->queueService = new QueueService();
-    }
-
-    /**
-     * Отправка JSON-ответа
-     */
-    private function jsonResponse($data, $statusCode = 200)
-    {
-        http_response_code($statusCode);
-        header('Content-Type: application/json');
-        echo json_encode($data);
-        exit;
     }
 
     /**
@@ -91,56 +69,40 @@ class ApiController extends BaseController
 
         $this->logger->info($logMessage);
 
-        $result = [
-            'success' => false,
-            'message' => 'No operation was performed for the given event'
-        ];
         return $this->json($result);
     }
 
     /**
      * API для получения данных менеджера
      */
-    public function getManager()
+    public function getManager($id)
     {
-        // Проверка API-ключа
-        $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
-        if (!$this->validateApiKey($apiKey)) {
-            $this->jsonResponse(['error' => 'Недействительный API-ключ'], 401);
-            return;
-        }
-
-        // Валидация входящих данных
-        $rules = [
-            'line_id' => 'required|integer',
-            'order_id' => 'required|integer'
-        ];
-
-        $data = json_decode(file_get_contents('php://input'), true) ?: [];
-
-        if (!$this->validationService->validate($data, $rules)) {
-            $this->jsonResponse([
-                'error' => 'Ошибка валидации',
-                'details' => $this->validationService->getErrors()
+        // Проверяем, что ID передан
+        if (!$id) {
+            return $this->json([
+                'success' => false,
+                'message' => 'Manager ID is required'
             ], 400);
-            return;
         }
 
-        // Получение менеджера
-        $result = $this->queueService->getNextManager($data['line_id'], $data['order_id']);
+        // Получаем данные менеджера
+        $managerModel = new Manager();
+        $manager = $managerModel->getById($id);
 
-        if ($result['success']) {
-            $this->jsonResponse(['manager_id' => $result['manager_id']]);
-        } else {
-            $this->jsonResponse(['error' => $result['message']], 500);
+        if (!$manager) {
+            return $this->json([
+                'success' => false,
+                'message' => 'Manager not found'
+            ], 404);
         }
-    }
 
-    private function validateApiKey($apiKey)
-    {
-        // Проверка API-ключа из конфигурации или базы данных
-        $validApiKey = getenv('API_KEY') ?: 'default_api_key'; // Временное решение
-        return hash_equals($validApiKey, $apiKey);
+        // Исключаем внутренние поля из ответа
+        unset($manager['password']);
+
+        return $this->json([
+            'success' => true,
+            'manager' => $manager
+        ]);
     }
 
     /**
@@ -343,153 +305,5 @@ class ApiController extends BaseController
         $this->logger->info($logMessage);
 
         return $this->json($result);
-    }
-    /**
-     * Обработка webhook от RetailCRM
-     */
-    public function processRetailCRMWebhook()
-    {
-        $this->logger->info('Received RetailCRM webhook');
-
-        // Получаем данные запроса
-        $input = file_get_contents('php://input');
-
-        if (empty($input)) {
-            $this->logger->error('Empty webhook data');
-            return $this->json([
-                'success' => false,
-                'message' => 'Empty webhook data'
-            ], 400);
-        }
-
-        // Декодируем JSON
-        $data = json_decode($input, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            $this->logger->error('Invalid JSON in webhook: ' . json_last_error_msg());
-            return $this->json([
-                'success' => false,
-                'message' => 'Invalid JSON: ' . json_last_error_msg()
-            ], 400);
-        }
-
-        // Логируем данные
-        $this->logger->info('RetailCRM webhook data: ' . json_encode($data));
-
-        // Определяем тип события
-        $topic = $data['topic'] ?? '';
-
-        switch ($topic) {
-            case 'orders.create':
-                return $this->handleRetailCRMOrderCreate($data);
-
-            case 'orders.status.changed':
-                return $this->handleRetailCRMStatusChanged($data);
-
-            default:
-                $this->logger->warning('Unsupported RetailCRM event: ' . $topic);
-                return $this->json([
-                    'success' => false,
-                    'message' => 'Unsupported event: ' . $topic
-                ]);
-        }
-    }
-
-    /**
-     * Обработка создания заказа в RetailCRM
-     */
-    private function handleRetailCRMOrderCreate($data)
-    {
-        // Извлекаем данные заказа
-        $order = $data['payload']['order'] ?? null;
-
-        if (!$order || !isset($order['id'])) {
-            $this->logger->error('Order data not found in webhook');
-            return $this->json([
-                'success' => false,
-                'message' => 'Order data not found'
-            ]);
-        }
-
-        // Формируем данные для обработки
-        $orderData = [
-            'order_id' => 'retailcrm_' . $order['id'],
-            'title' => 'Заказ #' . $order['number'],
-            'price' => $order['totalSumm'] ?? 0,
-            'items' => $order['items'] ?? [],
-            'customer' => [
-                'name' => $order['firstName'] ?? '',
-                'phone' => $order['phone'] ?? '',
-                'email' => $order['email'] ?? ''
-            ],
-            'source' => 'retailcrm',
-            'callback_requested' => isset($order['customFields']['callback_required']) && $order['customFields']['callback_required'] === 'yes',
-            'raw_data' => $order
-        ];
-
-        // Передаем заказ в сервис распределения
-        $result = $this->distributionService->processOrder($orderData, 'retailcrm');
-
-        // Логируем результат
-        $this->logger->info('RetailCRM order distribution result: ' . json_encode($result));
-
-        return $this->json($result);
-    }
-
-    /**
-     * Обработка изменения статуса заказа в RetailCRM
-     */
-    private function handleRetailCRMStatusChanged($data)
-    {
-        // Извлекаем данные
-        $order = $data['payload']['order'] ?? null;
-
-        if (!$order || !isset($order['id'])) {
-            $this->logger->error('Order data not found in webhook');
-            return $this->json([
-                'success' => false,
-                'message' => 'Order data not found'
-            ]);
-        }
-
-        // Формируем ID заказа в том же формате, как при создании
-        $orderId = 'retailcrm_' . $order['id'];
-
-        // Получаем новый статус
-        $retailCrmStatus = $order['status'] ?? 'new';
-
-        // Маппинг статусов RetailCRM на внутренние
-        $statusMapping = [
-            'new' => 'new',
-            'approval' => 'processing',
-            'assembling' => 'processing',
-            'ready-for-delivery' => 'processing',
-            'delivering' => 'processing',
-            'complete' => 'completed',
-            'canceled' => 'cancelled'
-        ];
-
-        $mappedStatus = $statusMapping[$retailCrmStatus] ?? 'processing';
-
-        // Обновляем статус
-        $result = $this->distributionService->updateOrderStatus(
-            $orderId,
-            $mappedStatus,
-            'retailcrm',
-            [
-                'retailcrm_status' => $retailCrmStatus,
-                'order_number' => $order['number'] ?? '',
-                'changed_at' => date('Y-m-d H:i:s')
-            ]
-        );
-
-        return $this->json($result);
-    }
-    protected function json($data, $statusCode = 200)
-    {
-        http_response_code($statusCode);
-        header('Content-Type: application/json');
-        echo json_encode($data);
-        exit;
     }
 }

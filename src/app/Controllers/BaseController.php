@@ -1,8 +1,4 @@
 <?php
-namespace App\Controllers;
-
-use App\Models\Queue; // Import the Queue class
-use App\Models\OrderTracker; // Import the OrderTracker class
 
 class BaseController
 {
@@ -64,42 +60,5 @@ class BaseController
         $bytes /= pow(1024, $pow);
 
         return round($bytes, 2) . ' ' . $units[$pow];
-    }
-        /**
-     * Страница статистики распределения заказов
-     */
-    public function distributionStats()
-    {
-        $queueModel = new Queue();
-        $queues = $queueModel->getAll();
-        
-        return $this->view('dashboard/distribution_stats', [
-            'queues' => $queues
-        ]);
-    }
-    
-    /**
-     * API для получения данных статистики распределения
-     */
-    public function getDistributionStatsData()
-    {
-        // Получаем параметры фильтрации
-        $queueId = $_GET['queue_id'] ?? null;
-        $dateFrom = $_GET['date_from'] ?? date('Y-m-d', strtotime('-7 days'));
-        $dateTo = $_GET['date_to'] ?? date('Y-m-d');
-        
-        $orderTracker = new OrderTracker();
-        
-        // Получаем статистику по алгоритмам
-        $algorithmStats = $orderTracker->getDistributionAlgorithmStats($queueId, $dateFrom, $dateTo);
-        
-        // Получаем статистику по менеджерам
-        $managerStats = $orderTracker->getManagersDistributionStats($queueId, $dateFrom, $dateTo);
-        
-        return $this->json([
-            'success' => true,
-            'algorithm_stats' => $algorithmStats,
-            'manager_stats' => $managerStats
-        ]);
     }
 }

@@ -1,31 +1,15 @@
 <?php
-namespace App\Controllers;
 
-use App\Models\OrderTracker;
-use Monolog\Logger;
-use Monolog\Handler\StreamHandler;
-use App\Models\Manager;
-use App\Models\Queue;
-use App\Services\DistributionService;
-use App\Services\DatabaseService; // Правильный импорт
-use \PDO;
-use \PDOException;
 
 class OrderTrackingController extends BaseController
 {
     private $orderTracker;
     private $logger;
-    private $distributionService;
-    private $db;
 
     public function __construct()
     {
-        $this->logger = new Logger('orders_tracking');
-        
         $this->orderTracker = new OrderTracker();
-    
-        $this->db = DatabaseService::getInstance()->getConnection();
-        $this->distributionService = new DistributionService();
+        $this->logger = new Logger('orders_tracking.log');
     }
 
     /**
@@ -105,7 +89,7 @@ class OrderTrackingController extends BaseController
 
             $whereClause = !empty($conditions) ? "WHERE " . implode(" AND ", $conditions) : "";
 
-            $db = DatabaseService::getInstance()->getConnection();
+            $db = Database::getInstance()->getConnection();
             $query = "
                 SELECT 
                     ot.*,

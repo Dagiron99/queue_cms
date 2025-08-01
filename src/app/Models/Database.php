@@ -1,7 +1,5 @@
 <?php
 
-namespace App\Models;   
-use App\Services\DatabaseService;
 
 class Database
 {

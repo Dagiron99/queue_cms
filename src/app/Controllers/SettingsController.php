@@ -1,7 +1,4 @@
 <?php
-namespace App\Controllers;
-
-use App\Models\Settings;
 
 class SettingsController extends BaseController
 {
@@ -116,7 +113,7 @@ class SettingsController extends BaseController
                 'portal_name' => 'Тестовый портал Битрикс24',
                 'version' => '22.0.1'
             ];
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             return [
                 'success' => false,
                 'message' => $e->getMessage()
@@ -141,7 +138,7 @@ class SettingsController extends BaseController
                 'crm_name' => 'Тестовый аккаунт RetailCRM',
                 'version' => '6.2.0'
             ];
-        } catch (\Exception $e) {
+        } catch (Exception $e) {
             return [
                 'success' => false,
                 'message' => $e->getMessage()
