@@ -26,8 +26,8 @@ $router->post('/queues/update', ['QueueController', 'update']);
 $router->post('/queues/update/{id}', ['QueueController', 'update']);
 
 // Логи
-$router->get('/logs', ['LogController', 'index']);
-$router->post('/logs/clear', ['LogController', 'clear']);
+$router->get('/logs/', ['LogsController', 'index']);
+$router->post('/logs/export-csv', ['LogsController', 'exportCsv']);
 
 // Настройки
 $router->get('/settings', ['SettingsController', 'index']);

@@ -41,7 +41,7 @@ class QueueController extends BaseController
                 $queue['current_position'] = 1;
                 logToFile("Для очереди ID={$queue['id']} установлен current_position по умолчанию", 'app.log');
             }
-            $queue['distribution_stats'] = $this->queueModel->getQueueDistributionStats($queue['id']);
+            $queue['distribution_stats'] = $this->queueModel->getQueueDistributionStats($queue['id']) ?? [];
             // Добавляем менеджеров для очереди
             $queueManagersMap[$queue['id']] = $this->queueModel->getManagersForQueue($queue['id']);
         }
@@ -150,7 +150,7 @@ class QueueController extends BaseController
 
         // Fallback только если очередь типа online-fallback, чекбокс is_fallback в форме
         $isFallback = 0;
-        if ($queue && $queue['type'] === 'online-fallback') {
+        if (is_array($queue) && $queue['type'] === 'online-fallback') {
             $isFallback = isset($_POST['is_fallback']) ? 1 : 0;
         }
 

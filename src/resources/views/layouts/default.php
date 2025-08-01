@@ -58,7 +58,7 @@
                         <li class="nav-item">
                             <a class="nav-link <?php echo strpos($_SERVER['REQUEST_URI'], '/logs') === 0 ? 'active' : ''; ?>" href="/logs">
                                 <i class="bi bi-journal-text me-2"></i>
-                                Журнал событий
+                                Логи
                             </a>
                         </li>
                         <li class="nav-item">

@@ -1,224 +1,218 @@
-<div class="row mb-4">
-    <div class="col-md-6">
-        <div class="d-flex align-items-center">
-            <i class="bi bi-journal-text fs-1 me-3 text-primary"></i>
-            <div>
-                <h5 class="mb-0">Журнал системных событий</h5>
-                <p class="text-muted mb-0">Просмотр и анализ логов системы</p>
+<?php
+// Заголовок страницы
+$pageTitle = 'Логи распределения заказов';
+
+// Начало буфера вывода
+ob_start();
+?>
+
+<div class="container-fluid mt-4">
+    <div class="row">
+        <div class="col-md-12">
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="/dashboard">Главная</a></li>
+                    <li class="breadcrumb-item active">Логи распределения заказов</li>
+                </ol>
+            </nav>
+            
+            <h1>Логи распределения заказов</h1>
+            
+            <?php 
+            if (function_exists('displayFlashMessages')) {
+                displayFlashMessages(); 
+            } else {
+                echo '<div class="alert alert-warning">Flash messages function is not available.</div>';
+            }
+            ?>
+            
+            <!-- Фильтры -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h5 class="mb-0">Фильтры</h5>
+                </div>
+                <div class="card-body">
+                    <form method="get" class="row g-3">
+                        <div class="col-md-3">
+                            <label for="queue_id" class="form-label">Очередь</label>
+                            <select class="form-select" id="queue_id" name="queue_id">
+                                <option value="">Все очереди</option>
+                                <?php foreach ($queues as $queue): ?>
+                                    <option value="<?php echo $queue['id']; ?>" <?php echo (isset($filter['queue_id']) && $filter['queue_id'] == $queue['id']) ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($queue['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-3">
+                            <label for="manager_id" class="form-label">Менеджер</label>
+                            <select class="form-select" id="manager_id" name="manager_id">
+                                <option value="">Все менеджеры</option>
+                                <?php foreach ($managers as $manager): ?>
+                                    <option value="<?php echo $manager['id']; ?>" <?php echo (isset($filter['manager_id']) && $filter['manager_id'] == $manager['id']) ? 'selected' : ''; ?>>
+                                        <?php echo htmlspecialchars($manager['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-2">
+                            <label for="status" class="form-label">Статус</label>
+                            <select class="form-select" id="status" name="status">
+                                <option value="">Все статусы</option>
+                                <option value="success" <?php echo (isset($filter['status']) && $filter['status'] == 'success') ? 'selected' : ''; ?>>Успешно</option>
+                                <option value="error" <?php echo (isset($filter['status']) && $filter['status'] == 'error') ? 'selected' : ''; ?>>Ошибка</option>
+                            </select>
+                        </div>
+                        
+                        <div class="col-md-2">
+                            <label for="date_from" class="form-label">Дата от</label>
+                            <input type="date" class="form-control" id="date_from" name="date_from" value="<?php echo $filter['date_from'] ?? ''; ?>">
+                        </div>
+                        
+                        <div class="col-md-2">
+                            <label for="date_to" class="form-label">Дата до</label>
+                            <input type="date" class="form-control" id="date_to" name="date_to" value="<?php echo $filter['date_to'] ?? ''; ?>">
+                        </div>
+                        
+                        <div class="col-md-8">
+                            <label for="search" class="form-label">Поиск по ID заказа или описанию</label>
+                            <input type="text" class="form-control" id="search" name="search" value="<?php echo $filter['search'] ?? ''; ?>" placeholder="Введите ID заказа или часть описания">
+                        </div>
+                        
+                        <div class="col-md-4 d-flex align-items-end">
+                            <button type="submit" class="btn btn-primary me-2">Применить фильтры</button>
+                            <a href="/logs" class="btn btn-secondary me-2">Сбросить</a>
+                            <a href="/logs/export-csv<?php echo !empty($_SERVER['QUERY_STRING']) ? '?' . $_SERVER['QUERY_STRING'] : ''; ?>" class="btn btn-success">
+                                <i class="bi bi-download"></i> Экспорт в CSV
+                            </a>
+                        </div>
+                    </form>
+                </div>
             </div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="d-flex justify-content-end">
-            <?php if ($selectedLog): ?>
-                <form method="post" action="/logs/clear" class="me-2" onsubmit="return confirm('Вы уверены, что хотите очистить лог-файл?');">
-                    <input type="hidden" name="file" value="<?php echo htmlspecialchars($selectedLog); ?>">
-                    <button type="submit" class="btn btn-outline-danger btn-sm">
-                        <i class="bi bi-trash me-1"></i> Очистить лог
-                    </button>
-                </form>
-                <a href="/logs" class="btn btn-outline-secondary btn-sm me-2">
-                    <i class="bi bi-arrow-left me-1"></i> Назад к списку
-                </a>
-            <?php endif; ?>
-            <button type="button" class="btn btn-outline-primary btn-sm" onclick="refreshLogs()">
-                <i class="bi bi-arrow-clockwise me-1"></i> Обновить
-            </button>
+            
+            <!-- Таблица логов -->
+            <div class="card">
+                <div class="card-body">
+                    <?php if (empty($logs)): ?>
+                        <div class="alert alert-info">
+                            Логов не найдено. Попробуйте изменить параметры фильтрации.
+                        </div>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table table-striped table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Очередь</th>
+                                        <th>Менеджер</th>
+                                        <th>ID заказа</th>
+                                        <th>Статус</th>
+                                        <th>Описание</th>
+                                        <th>Дата</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($logs as $log): ?>
+                                        <tr>
+                                            <td><?php echo $log['id']; ?></td>
+                                            <td><?php echo htmlspecialchars($log['queue_name'] ?? 'Не указано'); ?></td>
+                                            <td><?php echo htmlspecialchars($log['manager_name'] ?? 'Не указано'); ?></td>
+                                            <td><?php echo htmlspecialchars($log['order_id']); ?></td>
+                                            <td>
+                                                <?php if ($log['status'] == 'success'): ?>
+                                                    <span class="badge bg-success">Успешно</span>
+                                                <?php else: ?>
+                                                    <span class="badge bg-danger">Ошибка</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($log['description']); ?></td>
+                                            <td><?php echo $log['created_at']; ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <!-- Пагинация -->
+                        <?php if ($totalPages > 1): ?>
+                            <nav aria-label="Навигация по страницам" class="mt-4">
+                                <ul class="pagination justify-content-center">
+                                    <?php
+                                    // Предыдущая страница
+                                    if ($page > 1): ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>" aria-label="Предыдущая">
+                                                <span aria-hidden="true">&laquo;</span>
+                                            </a>
+                                        </li>
+                                    <?php else: ?>
+                                        <li class="page-item disabled">
+                                            <span class="page-link">&laquo;</span>
+                                        </li>
+                                    <?php endif; ?>
+                                    
+                                    <?php
+                                    // Страницы
+                                    $startPage = max(1, $page - 2);
+                                    $endPage = min($totalPages, $page + 2);
+                                    
+                                    // Показываем первую страницу если текущая далеко
+                                    if ($startPage > 1): ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => 1])); ?>">1</a>
+                                        </li>
+                                        <?php if ($startPage > 2): ?>
+                                            <li class="page-item disabled">
+                                                <span class="page-link">...</span>
+                                            </li>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                    
+                                    <?php for ($i = $startPage; $i <= $endPage; $i++): ?>
+                                        <li class="page-item <?php echo $i == $page ? 'active' : ''; ?>">
+                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>"><?php echo $i; ?></a>
+                                        </li>
+                                    <?php endfor; ?>
+                                    
+                                    <?php
+                                    // Показываем последнюю страницу если текущая далеко
+                                    if ($endPage < $totalPages): ?>
+                                        <?php if ($endPage < $totalPages - 1): ?>
+                                            <li class="page-item disabled">
+                                                <span class="page-link">...</span>
+                                            </li>
+                                        <?php endif; ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $totalPages])); ?>"><?php echo $totalPages; ?></a>
+                                        </li>
+                                    <?php endif; ?>
+                                    
+                                    <?php
+                                    // Следующая страница
+                                    if ($page < $totalPages): ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>" aria-label="Следующая">
+                                                <span aria-hidden="true">&raquo;</span>
+                                            </a>
+                                        </li>
+                                    <?php else: ?>
+                                        <li class="page-item disabled">
+                                            <span class="page-link">&raquo;</span>
+                                        </li>
+                                    <?php endif; ?>
+                                </ul>
+                            </nav>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
         </div>
     </div>
 </div>
 
-<?php if (empty($logFiles)): ?>
-    <div class="alert alert-info">
-        <i class="bi bi-info-circle me-2"></i> Лог-файлы не найдены. Возможно, система еще не создала файлы логов.
-    </div>
-<?php elseif (!$selectedLog): ?>
-    <!-- Список лог-файлов -->
-    <div class="card">
-        <div class="card-header d-flex align-items-center">
-            <i class="bi bi-file-text me-2"></i>
-            <span>Доступные лог-файлы</span>
-        </div>
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover mb-0">
-                    <thead>
-                        <tr>
-                            <th>Имя файла</th>
-                            <th>Размер</th>
-                            <th>Дата изменения</th>
-                            <th>Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($logFiles as $log): ?>
-                            <tr>
-                                <td>
-                                    <i class="bi bi-file-text me-2"></i>
-                                    <?php echo htmlspecialchars($log['name']); ?>
-                                </td>
-                                <td><?php echo $this->formatFileSize($log['size']); ?></td>
-                                <td><?php echo date('d.m.Y H:i:s', $log['modified']); ?></td>
-                                <td>
-                                    <a href="/logs?file=<?php echo urlencode($log['name']); ?>" class="btn btn-sm btn-primary">
-                                        <i class="bi bi-eye me-1"></i> Просмотр
-                                    </a>
-                                    <form method="post" action="/logs/clear" class="d-inline" onsubmit="return confirm('Вы уверены, что хотите очистить лог-файл?');">
-                                        <input type="hidden" name="file" value="<?php echo htmlspecialchars($log['name']); ?>">
-                                        <button type="submit" class="btn btn-sm btn-danger">
-                                            <i class="bi bi-trash me-1"></i> Очистить
-                                        </button>
-                                    </form>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-<?php else: ?>
-    <!-- Содержимое выбранного лог-файла -->
-    <div class="card">
-        <div class="card-header d-flex align-items-center">
-            <i class="bi bi-file-text me-2"></i>
-            <span>Содержимое файла: <?php echo htmlspecialchars($selectedLog); ?></span>
-        </div>
-        <div class="card-body">
-            <div class="log-controls mb-3">
-                <div class="btn-group" role="group">
-                    <button type="button" class="btn btn-sm btn-outline-primary" id="btn-scroll-bottom">
-                        <i class="bi bi-arrow-down"></i> Прокрутить вниз
-                    </button>
-                    <button type="button" class="btn btn-sm btn-outline-primary" id="btn-scroll-top">
-                        <i class="bi bi-arrow-up"></i> Прокрутить вверх
-                    </button>
-                </div>
-                <div class="btn-group ms-2" role="group">
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-filter-errors">
-                        <i class="bi bi-exclamation-triangle"></i> Только ошибки
-                    </button>
-                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btn-filter-reset">
-                        <i class="bi bi-funnel"></i> Сбросить фильтры
-                    </button>
-                </div>
-            </div>
-            
-            <?php if (empty($logContent)): ?>
-                <div class="alert alert-info">
-                    <i class="bi bi-info-circle me-2"></i> Лог-файл пуст.
-                </div>
-            <?php else: ?>
-                <div class="log-container" id="log-content">
-                    <pre><?php echo $logContent; ?></pre>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-<?php endif; ?>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Прокрутка до нижней части лога
-    const btnScrollBottom = document.getElementById('btn-scroll-bottom');
-    if (btnScrollBottom) {
-        btnScrollBottom.addEventListener('click', function() {
-            const logContent = document.getElementById('log-content');
-            if (logContent) {
-                logContent.scrollTop = logContent.scrollHeight;
-            }
-        });
-    }
-    
-    // Прокрутка до верхней части лога
-    const btnScrollTop = document.getElementById('btn-scroll-top');
-    if (btnScrollTop) {
-        btnScrollTop.addEventListener('click', function() {
-            const logContent = document.getElementById('log-content');
-            if (logContent) {
-                logContent.scrollTop = 0;
-            }
-        });
-    }
-    
-    // Фильтрация только ошибок
-    const btnFilterErrors = document.getElementById('btn-filter-errors');
-    if (btnFilterErrors) {
-        btnFilterErrors.addEventListener('click', function() {
-            const logContent = document.getElementById('log-content');
-            if (logContent) {
-                const lines = logContent.querySelectorAll('pre span.text-danger');
-                
-                // Скрываем все строки
-                const allLines = logContent.querySelectorAll('pre br');
-                allLines.forEach(line => {
-                    line.parentNode.style.display = 'none';
-                });
-                
-                // Показываем только строки с ошибками
-                lines.forEach(line => {
-                    let currentNode = line;
-                    while (currentNode && currentNode.tagName !== 'PRE') {
-                        currentNode = currentNode.parentNode;
-                    }
-                    if (currentNode) {
-                        currentNode.style.display = 'block';
-                    }
-                });
-            }
-        });
-    }
-    
-    // Сброс фильтров
-    const btnFilterReset = document.getElementById('btn-filter-reset');
-    if (btnFilterReset) {
-        btnFilterReset.addEventListener('click', function() {
-            const logContent = document.getElementById('log-content');
-            if (logContent) {
-                const allLines = logContent.querySelectorAll('pre');
-                allLines.forEach(line => {
-                    line.style.display = 'block';
-                });
-            }
-        });
-    }
-    
-    // Автоматическая прокрутка вниз при загрузке страницы
-    const logContent = document.getElementById('log-content');
-    if (logContent) {
-        logContent.scrollTop = logContent.scrollHeight;
-    }
-});
-
-// Функция обновления страницы логов
-function refreshLogs() {
-    location.reload();
-}
-</script>
-
-<style>
-.log-container {
-    background-color: #272822;
-    color: #f8f8f2;
-    padding: 15px;
-    border-radius: 5px;
-    max-height: 600px;
-    overflow-y: auto;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 0.9rem;
-    line-height: 1.5;
-}
-
-.log-container pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    color: #f8f8f2;
-}
-
-.log-controls {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-}
-</style>
+<?php
+$content = ob_get_clean();
+require_once __DIR__ . '/../layouts/default.php';
+?>
